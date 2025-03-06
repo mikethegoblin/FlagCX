@@ -79,6 +79,14 @@ typedef struct flagcxComm *flagcxComm_t;
 /* Opaque handle to flagcxStream */
 typedef struct flagcxStream *flagcxStream_t;
 
+struct flagcxDevProps {
+  char name[256];
+  int pciBusId;
+  int pciDeviceId;
+  int pciDomainId;
+  int gdrSupported;
+};
+
 struct flagcxDeviceHandle {
   // Basic functions
   flagcxResult_t (*deviceSynchronize)();

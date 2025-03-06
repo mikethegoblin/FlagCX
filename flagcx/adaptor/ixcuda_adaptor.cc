@@ -202,6 +202,34 @@ flagcxResult_t ixcudaAdaptorLaunchHostFunc(flagcxStream_t stream, void (*fn)(voi
     return flagcxSuccess;
 }
 
+flagcxResult_t ixcudaAdaptorGetDeviceProperties(struct flagcxDeviceProps *props, int dev)
+{
+    if (props == NULL)
+    {
+        return flagcxInvalidArgument;
+    }
+    
+    cudaDeviceProp deviceProp;
+    DEVCHECK(cudaGetDeviceProperties(&devProp, dev));
+    props->name = devProp.name;
+    props->pciBusId = devProp.pciBusID;
+    props->pciDeviceId = devProp.pciDeviceID;
+    props->pciDomainId = devProp.pciDomainID;
+    props->gdrSupported = devProp.gdrSupport;
+    
+    return flagcxSuccess;
+}
+
+flagcxResult_t ixcudaAdaptorGetDevicePciBusId(char *pciBusId, int len, int dev)
+{
+    if (pciBusId == NULL) 
+    {
+        return flagcxInvalidArgument;
+    }
+    DEVCHECK(cudaDeviceGetPCIBusId(pciBusId, len, dev));
+    return flagcxSuccess;
+}
+
 struct flagcxDeviceAdaptor ixcudaAdaptor{
     "IXCUDA",
     // Basic functions
@@ -231,7 +259,8 @@ struct flagcxDeviceAdaptor ixcudaAdaptor{
     NULL, // flagcxResult_t (*copyArgsInit)(void **args);
     NULL, // flagcxResult_t (*copyArgsFree)(void *args);
     // Others
-    NULL, // flagcxResult_t (*topoGetSystem)(void *topoArgs, void **system);
+    ixcudaAdaptorGetDeviceProperties, // flagcxResult_t (*getDeviceProperties)(struct flagcxDeviceProps *props, int dev);
+    ixcudaAdaptorGetDevicePciBusId, // flagcxResult_t (*getDevicePciBusId)(char *pciBusId, int len, int dev);
     ixcudaAdaptorLaunchHostFunc};
 
 #endif // USE_ILUVATAR_COREX_ADAPTOR

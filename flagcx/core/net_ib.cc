@@ -1978,11 +1978,38 @@ flagcxResult_t flagcxIbGetDevFromName(char *name, int *dev) {
   return flagcxSystemError;
 }
 
+flagcxResult_t flagcxIbGetProperties(int dev, flagcxNetProperties_t* props) {
+  struct flagcxIbMergedDev* mergedDev = flagcxIbMergedDevs + dev;
+  props->name = mergedDev->devName;
+  props->speed = mergedDev->speed;
+
+  // Take the rest of the properties from an arbitrary sub-device (should be the same)
+  struct flagcxIbDev* ibDev = flagcxIbDevs + mergedDev->devs[0];
+  props->pciPath = ibDev->pciPath;
+  props->guid = ibDev->guid;
+  props->ptrSupport = FLAGCX_PTR_HOST;
+
+  if (flagcxIbGdrSupport() == flagcxSuccess) {
+    props->ptrSupport |= FLAGCX_PTR_CUDA; // GDR support via nv_peermem
+  }
+  props->regIsGlobal = 1;
+  if (flagcxIbDmaBufSupport(dev) == flagcxSuccess) {
+    props->ptrSupport |= FLAGCX_PTR_DMABUF;
+  }
+  props->latency = 0; // Not set
+  props->port = ibDev->portNum + ibDev->realPort;
+  props->maxComms = ibDev->maxQp;
+  props->maxRecvs = FLAGCX_NET_IB_MAX_RECVS;
+  props->netDeviceType    = FLAGCX_NET_DEVICE_HOST;
+  props->netDeviceVersion = FLAGCX_NET_DEVICE_INVALID_VERSION;
+  return flagcxSuccess;
+}
+
 flagcxNet_t flagcxNetIb = {
   "IB",
   flagcxIbInit,
   flagcxIbDevices,
-  NULL /*flagcxIbGetProperties*/,
+  flagcxIbGetProperties,
   flagcxIbListen,
   flagcxIbConnect,
   flagcxIbAccept,

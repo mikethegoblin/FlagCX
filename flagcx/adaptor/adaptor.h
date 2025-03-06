@@ -139,10 +139,11 @@ struct flagcxDeviceAdaptor {
   flagcxResult_t (*copyArgsInit)(void **args);
   flagcxResult_t (*copyArgsFree)(void *args);
 
-  // Others
-  // TODO: this one shall be moved into Flagcx Core Topology APIs
-  // Here we only define several low-level APIs required by topology detection
-  flagcxResult_t (*topoGetSystem)(void *topoArgs, void **system);
+   // Others
+   // TODO: this one shall be moved into Flagcx Core Topology APIs
+   // Here we only define several low-level APIs required by topology detection
+   flagcxResult_t (*getDeviceProperties)(struct flagcxDevProps *props, int dev);
+   flagcxResult_t (*getDevicePciBusId)(char *pciBusId, int len, int dev);
 
   // HostFunc launch
   flagcxResult_t (*launchHostFunc)(flagcxStream_t stream, void (*fn)(void *),

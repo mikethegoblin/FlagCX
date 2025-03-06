@@ -207,7 +207,8 @@ struct flagcxDeviceAdaptor mluAdaptor{
     NULL, // flagcxResult_t (*copyArgsInit)(void **args);
     NULL, // flagcxResult_t (*copyArgsFree)(void *args);
     // Others
-    NULL, // flagcxResult_t (*topoGetSystem)(void *topoArgs, void **system);
+    NULL, // flagcxResult_t (*getDeviceProperties)(struct flagcxDevProps *props, int dev);
+    NULL, // flagcxResult_t (*getDevicePciBusId)(char *pciBusId, int len, int dev);
     mluAdaptorLaunchHostFunc};
 
 #endif // USE_CAMBRICON_ADAPTOR

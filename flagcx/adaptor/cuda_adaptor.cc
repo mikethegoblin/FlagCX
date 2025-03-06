@@ -202,6 +202,33 @@ flagcxResult_t cudaAdaptorLaunchHostFunc(flagcxStream_t stream, void (*fn)(void 
     return flagcxSuccess;
 }
 
+flagcxResult_t cudaAdaptorGetDeviceProperties(struct flagcxDeviceProps *props, int dev)
+{
+    if (props == NULL)
+    {
+        return flagcxInvalidArgument;
+    }
+    
+    cudaDeviceProp deviceProp;
+    DEVCHECK(cudaGetDeviceProperties(&devProp, dev));
+    props->name = devProp.name;
+    props->pciBusId = devProp.pciBusID;
+    props->pciDeviceId = devProp.pciDeviceID;
+    props->pciDomainId = devProp.pciDomainID;
+    props->gdrSupported = devProp.gdrSupport;
+    
+    return flagcxSuccess;
+}
+
+flagcxResult_t cudaAdaptorGetDevicePciBusId(char *pciBusId, int len, int dev)
+{
+    if (pciBusId == NULL) {
+        return flagcxInvalidArgument;
+    }
+    DEVCHECK(cudaDeviceGetPCIBusId(pciBusId, len, dev));
+    return flagcxSuccess;
+}
+
 struct flagcxDeviceAdaptor cudaAdaptor{
     "CUDA",
     // Basic functions
@@ -231,7 +258,8 @@ struct flagcxDeviceAdaptor cudaAdaptor{
     NULL, // flagcxResult_t (*copyArgsInit)(void **args);
     NULL, // flagcxResult_t (*copyArgsFree)(void *args);
     // Others
-    NULL, // flagcxResult_t (*topoGetSystem)(void *topoArgs, void **system);
+    cudaAdaptorGetDeviceProperties, // flagcxResult_t (*getDeviceProperties)(struct flagcxDevProps *props, int dev);
+    cudaAdaptorGetDevicePciBusId, // flagcxResult_t (*getDevicePciBusId)(char *pciBusId, int len, int dev);
     cudaAdaptorLaunchHostFunc};
 
 #endif // USE_NVIDIA_ADAPTOR
