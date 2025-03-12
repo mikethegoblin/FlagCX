@@ -85,6 +85,7 @@ static flagcxResult_t fillPeerInfo(flagcxHeteroComm_t comm,
 
 static flagcxResult_t initTransportsRank(flagcxHeteroComm_t comm,
                                          flagcxHeteroComm_t parent) {
+  TRACE(FLAGCX_INIT, "inside initTransportsRank");
   flagcxResult_t ret = flagcxSuccess;
   int rank = comm->rank;
   int nranks = comm->nRanks;
@@ -92,14 +93,17 @@ static flagcxResult_t initTransportsRank(flagcxHeteroComm_t comm,
 
   // fill peer info
   FLAGCXCHECKGOTO(flagcxCalloc(&comm->peerInfo, nranks), ret, fail);
+  TRACE(FLAGCX_INIT, "start fillPeerInfo");
   FLAGCXCHECKGOTO(fillPeerInfo(comm, comm->peerInfo + rank, comm->commHash),
                   ret, fail);
   // Question: where did we initialize comm->bootstrap?
-  FLAGCXCHECKGOTO(bootstrapAllGather(comm->bootstrap, comm->peerInfo,
+  TRACE(FLAGCX_INIT, "start bootstrapAllGather for peerInfo");
+  FLAGCXCHECKGOTO(bootstrapAllGather(comm->bootstrap, (void *)comm->peerInfo,
                                      sizeof(struct flagcxPeerInfo)),
                   ret, fail);
 
   // check for duplicate GPUs
+  TRACE(FLAGCX_INIT, "start check for duplicate GPUs");
   for (int i = 0; i < nranks; i++) {
     if (comm->peerInfo[i].hostHash != comm->peerInfo[rank].hostHash)
       nNodes++;
@@ -114,6 +118,7 @@ static flagcxResult_t initTransportsRank(flagcxHeteroComm_t comm,
     }
   }
 
+  TRACE(FLAGCX_INIT, "start flagcxTopoGetServerTopo");
   FLAGCXCHECKGOTO(flagcxTopoGetServerTopo(comm, &comm->topo), ret, fail);
 
   return ret;
@@ -175,12 +180,17 @@ static flagcxResult_t flagcxCommInitRankFunc(struct flagcxAsyncJob *job_) {
 
     FLAGCXCHECK(flagcxProxyInit(comm));
   }
+  TRACE(FLAGCX_INIT, "getting busId for cudaDev %d", comm->cudaDev);
   FLAGCXCHECK(getBusId(comm->cudaDev, &comm->busId));
+  TRACE(FLAGCX_INIT, "getting commHash for rank %d", comm->rank);
   comm->commHash = getHash(job->commId.internal, FLAGCX_UNIQUE_ID_BYTES);
+  TRACE(FLAGCX_INIT, "commHash for rank %d is %llu", comm->rank,
+        comm->commHash);
   // TODO: put net init into a separate function
   flagcxNetIb.init(NULL);
+  TRACE(FLAGCX_INIT, "start initTransportsRank");
   FLAGCXCHECKGOTO(initTransportsRank(comm, NULL), res, fail);
-  flagcxGetLocalNetFromGpu(comm->cudaDev, &comm->netDev);
+  // flagcxGetLocalNetFromGpu(comm->cudaDev, &comm->netDev);
 
 exit:
   return res;
@@ -288,6 +298,7 @@ flagcxResult_t flagcxHeteroCommDestroy(flagcxHeteroComm_t comm) {
   free(comm->tasks.peers);
   free(comm->tasks.p2pOrder);
   free(comm->abortFlagRefCount);
+  free(comm->peerInfo);
   free(comm);
 
   return flagcxSuccess;

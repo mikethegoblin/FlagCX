@@ -5,11 +5,13 @@ OBJDIR := $(BUILDDIR)/obj
 
 INCLUDEDIR := \
 	$(abspath include) \
-	$(abspath coll/include)
+	$(abspath coll/include) \
+	$(abspath topo/include)
 
 LIBSRCFILES:= \
 	$(wildcard *.cpp) \
-	$(wildcard coll/*.cpp)
+	$(wildcard coll/*.cpp) \
+	$(wildcard topo/*.cpp)
 
 BINOBJ := $(LIBSRCFILES:%.cpp=$(OBJDIR)/%.o)
 

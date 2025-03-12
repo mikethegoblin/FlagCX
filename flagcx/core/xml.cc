@@ -324,9 +324,10 @@ flagcxResult_t flagcxTopoGetXmlFromSys(struct flagcxXmlNode *pciNode,
 flagcxResult_t flagcxTopoFillApu(struct flagcxXml *xml, const char *busId,
                                  struct flagcxXmlNode **gpuNode) {
   struct flagcxXmlNode *pciNode;
+  TRACE(FLAGCX_INIT, "creating xml pci node for busId [%s]", busId);
   FLAGCXCHECK(flagcxTopoGetPciNode(xml, busId, &pciNode));
   FLAGCXCHECK(flagcxTopoGetXmlFromSys(pciNode, xml));
-
+  TRACE(FLAGCX_INIT, "creating xml apu node for busId [%s]", busId);
   FLAGCXCHECK(flagcxTopoGetXmlFromApu(pciNode, xml, gpuNode));
   return flagcxSuccess;
 }
@@ -359,6 +360,7 @@ flagcxResult_t flagcxTopoFillNet(struct flagcxXml *xml, const char *pciPath,
   const char *pciSysPath = pciPath;
   if (pciSysPath) {
     char subSystem[PATH_MAX];
+    TRACE(FLAGCX_INIT, "gettting subsystem for pciPath [%s]", pciSysPath);
     FLAGCXCHECK(flagcxTopoGetSubsystem(pciSysPath, subSystem));
     if (strcmp(subSystem, "pci") != 0) {
       INFO(FLAGCX_GRAPH,
@@ -371,11 +373,13 @@ flagcxResult_t flagcxTopoFillNet(struct flagcxXml *xml, const char *pciPath,
 
   struct flagcxXmlNode *parent = NULL;
   if (pciSysPath) {
+    TRACE(FLAGCX_INIT, "getting parent pci node for nic");
     int offset;
     for (offset = strlen(pciSysPath) - 1; pciSysPath[offset] != '/'; offset--)
       ;
     char busId[FLAGCX_DEVICE_PCI_BUSID_BUFFER_SIZE];
     strcpy(busId, pciSysPath + offset + 1);
+    TRACE(FLAGCX_INIT, "busId for parent pci node is [%s]", busId);
     FLAGCXCHECK(flagcxTopoGetPciNode(xml, busId, &parent));
     FLAGCXCHECK(flagcxTopoGetXmlFromSys(parent, xml));
   } else {
@@ -393,5 +397,40 @@ flagcxResult_t flagcxTopoFillNet(struct flagcxXml *xml, const char *pciPath,
   // beginning of this function), so we can add it.
   FLAGCXCHECK(xmlAddNode(xml, nicNode, "net", netNode));
   FLAGCXCHECK(xmlSetAttr(*netNode, "name", netName));
+  return flagcxSuccess;
+}
+
+flagcxResult_t flagcxTopoDumpXmlRec(int indent, FILE *file,
+                                    struct flagcxXmlNode *node) {
+  for (int i = 0; i < indent; i++)
+    fprintf(file, " ");
+  fprintf(file, "<%s", node->name);
+
+  for (int a = 0; a < node->nAttrs; a++) {
+    fprintf(file, " %s=\"%s\"", node->attrs[a].key, node->attrs[a].value);
+  }
+  if (node->nSubs == 0) {
+    fprintf(file, "/>\n");
+  } else {
+    fprintf(file, ">\n");
+    for (int s = 0; s < node->nSubs; s++) {
+      FLAGCXCHECK(flagcxTopoDumpXmlRec(indent + 2, file, node->subs[s]));
+    }
+    for (int i = 0; i < indent; i++)
+      fprintf(file, " ");
+    fprintf(file, "</%s>\n", node->name);
+  }
+  return flagcxSuccess;
+}
+
+flagcxResult_t flagcxTopoDumpXmlToFile(const char *xmlTopoFile,
+                                       struct flagcxXml *xml) {
+  FILE *file = fopen(xmlTopoFile, "w");
+  if (file == NULL) {
+    WARN("Unable to open %s, not dumping topology.", xmlTopoFile);
+    return flagcxSuccess;
+  }
+  FLAGCXCHECK(flagcxTopoDumpXmlRec(0, file, xml->nodes));
+  fclose(file);
   return flagcxSuccess;
 }

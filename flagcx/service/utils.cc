@@ -45,6 +45,7 @@ flagcxResult_t getBusId(int cudaDev, int64_t *busId) {
    **/
   FLAGCXCHECK(
       deviceAdaptor->getDevicePciBusId(busIdStr, sizeof(busIdStr), cudaDev));
+  TRACE(FLAGCX_INIT, "busId for cudaDev %d is %s", cudaDev, busIdStr);
   FLAGCXCHECK(busIdToInt64(busIdStr, busId));
   return flagcxSuccess;
 }
