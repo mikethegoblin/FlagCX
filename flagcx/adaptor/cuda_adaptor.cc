@@ -175,6 +175,8 @@ flagcxResult_t cudaAdaptorGetDeviceProperties(struct flagcxDevProps *props,
   props->pciBusId = devProp.pciBusID;
   props->pciDeviceId = devProp.pciDeviceID;
   props->pciDomainId = devProp.pciDomainID;
+  // TODO: for some cuda versions, cudaDeviceProp may not have
+  // gpuDirectRDMASupported field
   props->gdrSupported = devProp.gpuDirectRDMASupported;
 
   return flagcxSuccess;
