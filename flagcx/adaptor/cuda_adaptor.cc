@@ -191,7 +191,9 @@ flagcxResult_t cudaAdaptorGetDeviceProperties(struct flagcxDevProps *props,
   props->pciBusId = devProp.pciBusID;
   props->pciDeviceId = devProp.pciDeviceID;
   props->pciDomainId = devProp.pciDomainID;
-  props->gdrSupported = devProp.gpuDirectRDMASupported;
+  // TODO: see if there's another way to get this info. In some cuda versions,
+  // cudaDeviceProp does not have `gpuDirectRDMASupported` field
+  // props->gdrSupported = devProp.gpuDirectRDMASupported;
 
   return flagcxSuccess;
 }

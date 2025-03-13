@@ -175,7 +175,8 @@ struct flagcxDevProps {
   int pciBusId;
   int pciDeviceId;
   int pciDomainId;
-  int gdrSupported;
+  // remove unused field for now
+  // int gdrSupported;
 };
 
 flagcxResult_t flagcxTopoGetNode(struct flagcxTopoSystem *system,
