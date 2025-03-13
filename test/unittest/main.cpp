@@ -56,7 +56,9 @@ TEST_F(FlagCXTopoTest, TopoDetection) {
 
   // for now, ensure the topo detection runs without error
   // we should add a validation for the topo detection result
-  EXPECT_EQ(flagcxCommInitRank(&comm, nranks, uniqueId, rank), flagcxSuccess);
+  std::cout << "executing flagcxCommInitRank" << std::endl;
+  auto result = flagcxCommInitRank(&comm, nranks, uniqueId, rank);
+  EXPECT_EQ(result, flagcxSuccess);
 }
 
 int main(int argc, char *argv[]) {

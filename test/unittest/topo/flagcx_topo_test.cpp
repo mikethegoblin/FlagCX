@@ -16,6 +16,7 @@ void FlagCXTopoTest::SetUp() {
 
   if (rank == 0)
     flagcxGetUniqueId(&uniqueId);
+  std::cout << "finished getting uniqueId" << std::endl;
   MPI_Bcast((void *)uniqueId, sizeof(flagcxUniqueId), MPI_BYTE, 0,
             MPI_COMM_WORLD);
   MPI_Barrier(MPI_COMM_WORLD);

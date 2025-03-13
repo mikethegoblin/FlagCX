@@ -196,24 +196,24 @@ flagcxResult_t flagcxTopoGetServerTopo(struct flagcxHeteroComm *comm,
                                        struct flagcxTopoServer **serverTopo) {
   // TODO: first try to acquire topo from xml file
   struct flagcxXml *xml;
-  TRACE(FLAGCX_INIT, "allocing flagcxXml");
+  INFO(FLAGCX_INIT, "allocing flagcxXml");
   FLAGCXCHECK(xmlAlloc(&xml, FLAGCX_TOPO_XML_MAX_NODES));
 
   // create root node if we didn't get topo from xml file
   if (xml->maxIndex == 0) {
-    TRACE(FLAGCX_INIT, "creating root XML node");
+    INFO(FLAGCX_INIT, "creating root XML node");
     // Create top tag
     struct flagcxXmlNode *top;
     FLAGCXCHECK(xmlAddNode(xml, NULL, "system", &top));
     FLAGCXCHECK(xmlSetAttrInt(top, "version", FLAGCX_TOPO_XML_VERSION));
   }
 
-  TRACE(FLAGCX_INIT, "start detecting APUs");
+  INFO(FLAGCX_INIT, "start detecting APUs");
   for (int r = 0; r < comm->nRanks; r++) {
     if (comm->peerInfo[r].hostHash == comm->peerInfo[comm->rank].hostHash) {
-      TRACE(FLAGCX_INIT, "preparing to detect APU for rank %d", r);
+      INFO(FLAGCX_INIT, "preparing to detect APU for rank %d", r);
       char busId[FLAGCX_DEVICE_PCI_BUSID_BUFFER_SIZE];
-      TRACE(FLAGCX_INIT, "converting busId to string");
+      INFO(FLAGCX_INIT, "converting busId to string");
       FLAGCXCHECK(int64ToBusId(comm->peerInfo[r].busId, busId));
       struct flagcxXmlNode *node;
       FLAGCXCHECK(flagcxTopoFillApu(xml, busId, &node));
@@ -223,21 +223,23 @@ flagcxResult_t flagcxTopoGetServerTopo(struct flagcxHeteroComm *comm,
   }
 
   int netDevCount = 0;
-  TRACE(FLAGCX_INIT, "getting the number of net devices");
+  INFO(FLAGCX_INIT, "getting the number of net devices");
   FLAGCXCHECK(flagcxNetIb.devices(&netDevCount));
   for (int n = 0; n < netDevCount; n++) {
     flagcxNetProperties_t props;
-    TRACE(FLAGCX_INIT, "getting properties of net device %d", n);
+    INFO(FLAGCX_INIT, "getting properties of net device %d", n);
     FLAGCXCHECK(flagcxNetIb.getProperties(n, &props));
     struct flagcxXmlNode *netNode;
     FLAGCXCHECK(flagcxTopoFillNet(xml, props.pciPath, props.name, &netNode));
   }
 
-  const char *xmlTopoFile = flagcxGetEnv("FLAGCX_TOPO_DUMP_FILE");
-  TRACE(FLAGCX_INIT, "FLAGCX_TOPO_DUMP_FILE is %s", xmlTopoFile);
-  if (xmlTopoFile && comm->rank == 0) {
-    INFO(FLAGCX_ENV, "start dumping topo to xml file");
-    FLAGCXCHECK(flagcxTopoDumpXmlToFile(xmlTopoFile, xml));
+  if (comm->rank == 0) {
+    const char *xmlTopoFile = flagcxGetEnv("FLAGCX_TOPO_DUMP_FILE");
+    INFO(FLAGCX_INIT, "FLAGCX_TOPO_DUMP_FILE is %s", xmlTopoFile);
+    if (xmlTopoFile && comm->rank == 0) {
+      INFO(FLAGCX_ENV, "start dumping topo to xml file");
+      FLAGCXCHECK(flagcxTopoDumpXmlToFile(xmlTopoFile, xml));
+    }
   }
   // FLAGCXCHECK(flagcxTopoGetServerTopoFromXml(
   //     xml, serverTopo, comm->peerInfo[comm->rank].hostHash));

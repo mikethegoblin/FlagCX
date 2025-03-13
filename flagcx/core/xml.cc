@@ -68,8 +68,8 @@ flagcxResult_t flagcxTopoSetAttrFromSys(struct flagcxXmlNode *pciNode,
   if (strValue[0] != '\0') {
     FLAGCXCHECK(xmlSetAttr(pciNode, attrName, strValue));
   }
-  TRACE(FLAGCX_GRAPH, "Read from sys %s/%s -> %s=%s", path, fileName, attrName,
-        strValue);
+  INFO(FLAGCX_GRAPH, "Read from sys %s/%s -> %s=%s", path, fileName, attrName,
+       strValue);
   return flagcxSuccess;
 }
 
@@ -324,10 +324,10 @@ flagcxResult_t flagcxTopoGetXmlFromSys(struct flagcxXmlNode *pciNode,
 flagcxResult_t flagcxTopoFillApu(struct flagcxXml *xml, const char *busId,
                                  struct flagcxXmlNode **gpuNode) {
   struct flagcxXmlNode *pciNode;
-  TRACE(FLAGCX_INIT, "creating xml pci node for busId [%s]", busId);
+  INFO(FLAGCX_INIT, "creating xml pci node for busId [%s]", busId);
   FLAGCXCHECK(flagcxTopoGetPciNode(xml, busId, &pciNode));
   FLAGCXCHECK(flagcxTopoGetXmlFromSys(pciNode, xml));
-  TRACE(FLAGCX_INIT, "creating xml apu node for busId [%s]", busId);
+  INFO(FLAGCX_INIT, "creating xml apu node for busId [%s]", busId);
   FLAGCXCHECK(flagcxTopoGetXmlFromApu(pciNode, xml, gpuNode));
   return flagcxSuccess;
 }
@@ -360,7 +360,7 @@ flagcxResult_t flagcxTopoFillNet(struct flagcxXml *xml, const char *pciPath,
   const char *pciSysPath = pciPath;
   if (pciSysPath) {
     char subSystem[PATH_MAX];
-    TRACE(FLAGCX_INIT, "gettting subsystem for pciPath [%s]", pciSysPath);
+    INFO(FLAGCX_INIT, "gettting subsystem for pciPath [%s]", pciSysPath);
     FLAGCXCHECK(flagcxTopoGetSubsystem(pciSysPath, subSystem));
     if (strcmp(subSystem, "pci") != 0) {
       INFO(FLAGCX_GRAPH,
@@ -373,13 +373,13 @@ flagcxResult_t flagcxTopoFillNet(struct flagcxXml *xml, const char *pciPath,
 
   struct flagcxXmlNode *parent = NULL;
   if (pciSysPath) {
-    TRACE(FLAGCX_INIT, "getting parent pci node for nic");
+    INFO(FLAGCX_INIT, "getting parent pci node for nic");
     int offset;
     for (offset = strlen(pciSysPath) - 1; pciSysPath[offset] != '/'; offset--)
       ;
     char busId[FLAGCX_DEVICE_PCI_BUSID_BUFFER_SIZE];
     strcpy(busId, pciSysPath + offset + 1);
-    TRACE(FLAGCX_INIT, "busId for parent pci node is [%s]", busId);
+    INFO(FLAGCX_INIT, "busId for parent pci node is [%s]", busId);
     FLAGCXCHECK(flagcxTopoGetPciNode(xml, busId, &parent));
     FLAGCXCHECK(flagcxTopoGetXmlFromSys(parent, xml));
   } else {
