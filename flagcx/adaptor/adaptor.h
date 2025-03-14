@@ -102,6 +102,14 @@ typedef struct {
   char internal[MAX_VENDOR_LEN];
 } flagcxVendor;
 
+struct flagcxDevProps {
+  char name[256];
+  int pciBusId;
+  int pciDeviceId;
+  int pciDomainId;
+  int gdrSupported;
+};
+
 struct flagcxDeviceAdaptor {
   char name[32];
   // Basic functions
@@ -154,6 +162,7 @@ struct flagcxDeviceAdaptor {
   // Here we only define several low-level APIs required by topology detection
   flagcxResult_t (*getDeviceProperties)(struct flagcxDevProps *props, int dev);
   flagcxResult_t (*getDevicePciBusId)(char *pciBusId, int len, int dev);
+  flagcxResult_t (*getDeviceByPciBusId)(int *dev, const char *pciBusId);
 
   // HostFunc launch
   flagcxResult_t (*launchHostFunc)(flagcxStream_t stream, void (*fn)(void *),
