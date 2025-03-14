@@ -217,8 +217,12 @@ flagcxResult_t flagcxTopoGetServerTopo(struct flagcxHeteroComm *comm,
       FLAGCXCHECK(int64ToBusId(comm->peerInfo[r].busId, busId));
       struct flagcxXmlNode *node;
       FLAGCXCHECK(flagcxTopoFillApu(xml, busId, &node));
-      if (node == NULL)
+      if (node == NULL) {
         continue;
+      }
+      int devLogicalIdx = 0;
+      deviceAdaptor->getDeviceByPciBusId(&devLogicalIdx, busId);
+      FLAGCXCHECK(xmlSetAttrInt(node, "dev", devLogicalIdx));
     }
   }
 

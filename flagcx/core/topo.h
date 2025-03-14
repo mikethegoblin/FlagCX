@@ -219,6 +219,8 @@ flagcxResult_t flagcxTopoGetXmlFromGraphs(int ngraphs,
                                           struct flagcxTopoGraph **graphs,
                                           struct flagcxTopoServer *serverTopo,
                                           struct flagcxXml *xml);
+flagcxResult_t flagcxTopoGetXmlTopo(struct flagcxHeteroComm *comm,
+                                    struct flagcxXml *xml);
 flagcxResult_t flagcxTopoGetServerTopo(struct flagcxHeteroComm *comm,
                                        struct flagcxTopoServer **serverTopo);
 
