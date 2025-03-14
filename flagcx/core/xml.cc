@@ -686,6 +686,7 @@ flagcxResult_t flagcxTopoGetXmlFromFile(const char *xmlTopoFile,
 
 flagcxResult_t flagcxTopoDumpXmlToFile(const char *xmlTopoFile,
                                        struct flagcxXml *xml) {
+  // TODO: clear file content if file is not empty
   FILE *file = fopen(xmlTopoFile, "w");
   if (file == NULL) {
     WARN("Unable to open %s, not dumping topology.", xmlTopoFile);

@@ -33,8 +33,5 @@ $(OBJDIR)/%.o: %.cpp
 clean:
 	@rm -rf $(BINDIR)/$(TARGET) $(OBJDIR)
 
-run-allreduce:
-	@mpirun --allow-run-as-root -np 8 -x UCX_POSIX_USE_PROC_LINK=n -x CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 -x FLAGCX_LOG_LEVEL=INFO -x FLAGCX_LOG_SUBSYS=ALL ./build/bin/main
-
-run-topo-detect:
-	@mpirun --allow-run-as-root -np 8 -x UCX_POSIX_USE_PROC_LINK=n -x CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 -x FLAGCX_LOG_LEVEL=TRACE -x FLAGCX_TOPO_DUMP_FILE="xml_topo.xml" -x FLAGCX_DEBUG=TRACE -x FLAGCX_LOG_SUBSYS=ALL ./build/bin/main
+run-all-tests:
+	@mpirun --allow-run-as-root -np 8 -x UCX_POSIX_USE_PROC_LINK=n -x CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 -x FLAGCX_LOG_LEVEL=TRACE -x FLAGCX_TOPO_DUMP_FILE="xml_topo_dump.xml" -x FLAGCX_TOPO_FILE="topo_demo.xml" -x FLAGCX_DEBUG=TRACE -x FLAGCX_LOG_SUBSYS=ALL ./build/bin/main
