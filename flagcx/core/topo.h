@@ -187,6 +187,15 @@ struct topoArgs {
   void *bootstrap;
 };
 
+struct flagcxDevProps {
+  char name[256];
+  int pciBusId;
+  int pciDeviceId;
+  int pciDomainId;
+  // remove unused field for now
+  // int gdrSupported;
+};
+
 flagcxResult_t flagcxTopoGetNode(struct flagcxTopoServer *serverTopo,
                                  struct flagcxTopoNode **node, int type,
                                  uint64_t id);

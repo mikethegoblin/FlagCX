@@ -102,14 +102,6 @@ typedef struct {
   char internal[MAX_VENDOR_LEN];
 } flagcxVendor;
 
-struct flagcxDevProps {
-  char name[256];
-  int pciBusId;
-  int pciDeviceId;
-  int pciDomainId;
-  int gdrSupported;
-};
-
 struct flagcxDeviceAdaptor {
   char name[32];
   // Basic functions
