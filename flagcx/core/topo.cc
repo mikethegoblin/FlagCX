@@ -25,10 +25,18 @@ const char *topoLinkTypeStr[] = {"LOC", "CCI", "",    "PCI", "",
 const char *topoPathTypeStr[] = {"LOC", "CCI", "CCB", "PIX", "PXB",
                                  "PXN", "PHB", "SYS", "NET", "DIS"};
 
-struct kvDict kvDictPciGen[] = {
-{ "2.5 GT/s", 15 }, { "5 GT/s", 30 }, { "8 GT/s", 60 }, { "16 GT/s", 120 }, { "32 GT/s", 240 }, /* Kernel 5.6 and earlier */
-{ "2.5 GT/s PCIe", 15 }, { "5.0 GT/s PCIe", 30 }, { "8.0 GT/s PCIe", 60 }, { "16.0 GT/s PCIe", 120 }, { "32.0 GT/s PCIe", 240 }, { "64.0 GT/s PCIe", 480 },
-{ NULL, 60 /* Default fallback */ } };
+struct kvDict kvDictPciGen[] = {{"2.5 GT/s", 15},
+                                {"5 GT/s", 30},
+                                {"8 GT/s", 60},
+                                {"16 GT/s", 120},
+                                {"32 GT/s", 240}, /* Kernel 5.6 and earlier */
+                                {"2.5 GT/s PCIe", 15},
+                                {"5.0 GT/s PCIe", 30},
+                                {"8.0 GT/s PCIe", 60},
+                                {"16.0 GT/s PCIe", 120},
+                                {"32.0 GT/s PCIe", 240},
+                                {"64.0 GT/s PCIe", 480},
+                                {NULL, 60 /* Default fallback */}};
 
 flagcxResult_t flagcxTopoGetLocal(struct flagcxTopoServer *system, int type,
                                   int index, int resultType, int **locals,
@@ -152,10 +160,10 @@ flagcxResult_t flagcxTopoConnectNodes(struct flagcxTopoNode *node,
   return flagcxSuccess;
 }
 
-
-static flagcxResult_t flagcxTopoIdToIndex(struct flagcxTopoServer* server, int type, int64_t id, int* index) {
+static flagcxResult_t flagcxTopoIdToIndex(struct flagcxTopoServer *server,
+                                          int type, int64_t id, int *index) {
   *index = -1;
-  for (int i=0; i<server->nodes[type].count; i++) {
+  for (int i = 0; i < server->nodes[type].count; i++) {
     if (server->nodes[type].nodes[i].id == id) {
       *index = i;
       return flagcxSuccess;
@@ -164,26 +172,31 @@ static flagcxResult_t flagcxTopoIdToIndex(struct flagcxTopoServer* server, int t
   return flagcxInternalError;
 }
 
-
-flagcxResult_t flagcxTopoRemoveNode(struct flagcxTopoServer* server, int type, int index) {
-  struct flagcxTopoNode* delNode = server->nodes[type].nodes+index;
-  for (int t=0; t<FLAGCX_TOPO_NODE_TYPES; t++) {
+flagcxResult_t flagcxTopoRemoveNode(struct flagcxTopoServer *server, int type,
+                                    int index) {
+  struct flagcxTopoNode *delNode = server->nodes[type].nodes + index;
+  for (int t = 0; t < FLAGCX_TOPO_NODE_TYPES; t++) {
     free(delNode->paths[t]);
-    for (int n=0; n<server->nodes[t].count; n++) {
-      struct flagcxTopoNode* node = server->nodes[t].nodes+n;
-      if (node == delNode) continue;
-      for (int l=0; l<node->nlinks; l++) {
-        while (l<node->nlinks && node->links[l].remNode == delNode) {
-          memmove(node->links+l, node->links+l+1, (node->nlinks-l-1)*sizeof(struct flagcxTopoLink));
+    for (int n = 0; n < server->nodes[t].count; n++) {
+      struct flagcxTopoNode *node = server->nodes[t].nodes + n;
+      if (node == delNode)
+        continue;
+      for (int l = 0; l < node->nlinks; l++) {
+        while (l < node->nlinks && node->links[l].remNode == delNode) {
+          memmove(node->links + l, node->links + l + 1,
+                  (node->nlinks - l - 1) * sizeof(struct flagcxTopoLink));
           node->nlinks--;
         }
-        if (l<node->nlinks && node->links[l].remNode->type == type && node->links[l].remNode >= delNode) {
+        if (l < node->nlinks && node->links[l].remNode->type == type &&
+            node->links[l].remNode >= delNode) {
           node->links[l].remNode--;
         }
       }
     }
   }
-  memmove(delNode, delNode+1, (server->nodes[type].count-index-1)*sizeof(struct flagcxTopoNode));
+  memmove(delNode, delNode + 1,
+          (server->nodes[type].count - index - 1) *
+              sizeof(struct flagcxTopoNode));
   server->nodes[type].count--;
   return flagcxSuccess;
 }
@@ -206,54 +219,63 @@ flagcxResult_t flagcxTopoConnectCpus(struct flagcxTopoServer *topoServer) {
 }
 
 int getBcmGen(uint64_t id, int level) {
-  if ((id & 0xfffffffffffff000) == 0x1000c0101000a000) return 4;
-  if ((id & 0xfffffffffffff000) == (0x1000c03010000000 | level*0x1000)) return 5;
+  if ((id & 0xfffffffffffff000) == 0x1000c0101000a000)
+    return 4;
+  if ((id & 0xfffffffffffff000) == (0x1000c03010000000 | level * 0x1000))
+    return 5;
   return 0;
 }
 
 flagcxResult_t flagcxTopoFlattenBcmSwitches(struct flagcxTopoServer *server) {
   flagcxResult_t ret = flagcxSuccess;
-  for (int s=0; s<server->nodes[PCI].count; s++) {
-    struct flagcxTopoNode* pciSwitch = server->nodes[PCI].nodes+s;
+  for (int s = 0; s < server->nodes[PCI].count; s++) {
+    struct flagcxTopoNode *pciSwitch = server->nodes[PCI].nodes + s;
     int gen = getBcmGen(pciSwitch->pci.device, 0);
     // Flatten Gen4 PEX switches in base mode
     if (gen) {
       // Find sub switches with the same device ID.
-      int64_t* subSwIds;
+      int64_t *subSwIds;
       FLAGCXCHECK(flagcxCalloc(&subSwIds, pciSwitch->nlinks));
       int subs = 0;
-      for (int l=0; l<pciSwitch->nlinks; l++) {
-        struct flagcxTopoNode* sub = pciSwitch->links[l].remNode;
+      for (int l = 0; l < pciSwitch->nlinks; l++) {
+        struct flagcxTopoNode *sub = pciSwitch->links[l].remNode;
         // Only fuse sub switches with the same device ID.
-        if (sub->type != PCI || getBcmGen(sub->pci.device, 1) != gen) continue;
+        if (sub->type != PCI || getBcmGen(sub->pci.device, 1) != gen)
+          continue;
         // Save sub switch for later
         subSwIds[subs++] = sub->id;
         // Remove link to that sub switch
-        memmove(pciSwitch->links+l, pciSwitch->links+l+1, (pciSwitch->nlinks-l-1)*(sizeof(struct flagcxTopoLink)));
+        memmove(pciSwitch->links + l, pciSwitch->links + l + 1,
+                (pciSwitch->nlinks - l - 1) * (sizeof(struct flagcxTopoLink)));
         pciSwitch->nlinks--;
-        // Don't increase l for the next iteration as we just shifted all links by one.
+        // Don't increase l for the next iteration as we just shifted all links
+        // by one.
         l--;
       }
 
-      for (int s=0; s<subs; s++) {
-        // Find sub switch (system->nodes[PCI].nodes is changing every time we remove a node)
+      for (int s = 0; s < subs; s++) {
+        // Find sub switch (system->nodes[PCI].nodes is changing every time we
+        // remove a node)
         int index;
-        FLAGCXCHECKGOTO(flagcxTopoIdToIndex(server, PCI, subSwIds[s], &index), ret, fail);
-        struct flagcxTopoNode* sub = server->nodes[PCI].nodes+index;
+        FLAGCXCHECKGOTO(flagcxTopoIdToIndex(server, PCI, subSwIds[s], &index),
+                        ret, fail);
+        struct flagcxTopoNode *sub = server->nodes[PCI].nodes + index;
         // Connect all sub PCI devices to the parent switch
-        for (int l=0; l<sub->nlinks; l++) {
-          struct flagcxTopoNode* remNode = sub->links[l].remNode;
-          if (remNode == pciSwitch) continue;
+        for (int l = 0; l < sub->nlinks; l++) {
+          struct flagcxTopoNode *remNode = sub->links[l].remNode;
+          if (remNode == pciSwitch)
+            continue;
           // Add link from parent PCI switch -> PCI device
           if (pciSwitch->nlinks == FLAGCX_TOPO_MAX_LINKS) {
             WARN("Error : too many Topo links (max %d)", FLAGCX_TOPO_MAX_LINKS);
             ret = flagcxInternalError;
             goto fail;
           }
-          memcpy(pciSwitch->links+pciSwitch->nlinks, sub->links+l, sizeof(struct flagcxTopoLink));
+          memcpy(pciSwitch->links + pciSwitch->nlinks, sub->links + l,
+                 sizeof(struct flagcxTopoLink));
           pciSwitch->nlinks++;
           // Update link from PCI device -> parent PCI switch
-          for (int rl=0; rl<remNode->nlinks; rl++) {
+          for (int rl = 0; rl < remNode->nlinks; rl++) {
             if (remNode->links[rl].remNode == sub) {
               remNode->links[rl].remNode = pciSwitch;
               break;
@@ -268,7 +290,7 @@ flagcxResult_t flagcxTopoFlattenBcmSwitches(struct flagcxTopoServer *server) {
       // Restart, as system->nodes[PCI].nodes has changed.
       s = 0;
       continue;
-fail:
+    fail:
       free(subSwIds);
       return ret;
     }
@@ -563,7 +585,7 @@ flagcxResult_t flagcxTopoGetXmlTopo(struct flagcxHeteroComm *comm,
     FLAGCXCHECK(xmlSetAttrInt(netNode, "speed", props.speed));
     FLAGCXCHECK(xmlSetAttrFloat(netNode, "latency", props.latency));
     FLAGCXCHECK(xmlSetAttrInt(netNode, "port", props.port));
-    FLAGCXCHECK(xmlSetAttrLong(netNode,"guid", props.guid));
+    FLAGCXCHECK(xmlSetAttrLong(netNode, "guid", props.guid));
     FLAGCXCHECK(xmlSetAttrInt(netNode, "maxConn", props.maxComms));
   }
 
@@ -619,14 +641,19 @@ flagcxResult_t flagcxTopoAddNet(struct flagcxXmlNode *xmlNet,
   FLAGCXCHECK(flagcxTopoCreateNode(topoServer, &net, NET,
                                    FLAGCX_TOPO_ID(serverId, dev)));
   net->net.dev = dev;
+  int mbps;
   FLAGCXCHECK(xmlGetAttrLong(xmlNet, "guid", &net->net.guid));
-  FLAGCXCHECK(xmlGetAttrInt(xmlNet, "speed", &net->net.speed));
+  FLAGCXCHECK(xmlGetAttrIntDefault(xmlNet, "speed", &mbps, 0));
+  if (mbps <= 0) {
+    mbps = 10000;
+  }
+  net->net.bw = mbps / 8000.0;
   FLAGCXCHECK(xmlGetAttrFloat(xmlNet, "latency", &net->net.latency));
   FLAGCXCHECK(xmlGetAttrInt(xmlNet, "port", &net->net.port));
   FLAGCXCHECK(xmlGetAttrInt(xmlNet, "maxConn", &net->net.maxConn));
 
-  FLAGCXCHECK(flagcxTopoConnectNodes(nic, net, LINK_NET, 0));
-  FLAGCXCHECK(flagcxTopoConnectNodes(net, nic, LINK_NET, 0));
+  FLAGCXCHECK(flagcxTopoConnectNodes(nic, net, LINK_NET, net->net.bw));
+  FLAGCXCHECK(flagcxTopoConnectNodes(net, nic, LINK_NET, net->net.bw));
   return flagcxSuccess;
 }
 
@@ -727,10 +754,13 @@ flagcxResult_t flagcxTopoAddPci(struct flagcxXmlNode *xmlPci,
     int width, speed;
     FLAGCXCHECK(xmlGetAttrInt(xmlPci, "link_width", &width));
     FLAGCXCHECK(xmlGetAttrStr(xmlPci, "link_speed", &str));
-    if (width == 0) width = 16;
+    if (width == 0)
+      width = 16;
     FLAGCXCHECK(kvConvertToInt(str, &speed, kvDictPciGen));
-    FLAGCXCHECK(flagcxTopoConnectNodes(node, parent, LINK_PCI, width*speed/80.0));
-    FLAGCXCHECK(flagcxTopoConnectNodes(parent, node, LINK_PCI, width*speed/80.0));
+    FLAGCXCHECK(
+        flagcxTopoConnectNodes(node, parent, LINK_PCI, width * speed / 80.0));
+    FLAGCXCHECK(
+        flagcxTopoConnectNodes(parent, node, LINK_PCI, width * speed / 80.0));
   }
   return flagcxSuccess;
 }
