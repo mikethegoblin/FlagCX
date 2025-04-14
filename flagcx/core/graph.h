@@ -31,6 +31,10 @@ flagcxResult_t flagcxTopoGetNvbGpus(struct flagcxTopoServer *topoServer,
                                     int rank, int *nranks, int **ranks);
 int flagcxTopoPathAllNVLink(struct flagcxTopoServer *topoServer);
 
+void flagcxTopoFree(struct flagcxTopoServer *topoServer);
+
+void flagcxInterServerTopoFree(struct flagcxInterServerTopo *interServerTopo);
+
 // Query topology
 flagcxResult_t flagcxTopoGetNetDev(struct flagcxHeteroComm *comm, int rank,
                                    struct flagcxTopoGraph *graph, int channelId,

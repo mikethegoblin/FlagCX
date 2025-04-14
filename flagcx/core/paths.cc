@@ -149,22 +149,29 @@ flagcxResult_t flagcxTopoComputePaths(struct flagcxTopoServer *topoServer,
   // Precompute paths between GPUs/NICs.
 
   // Remove everything in case we're re-computing
+  INFO(FLAGCX_GRAPH, "Removing paths");
   flagcxTopoRemovePaths(topoServer);
 
   // Set direct paths to CPUs. We need them in many cases.
+  INFO(FLAGCX_GRAPH, "Setting paths to CPUs");
   for (int c = 0; c < topoServer->nodes[CPU].count; c++) {
     FLAGCXCHECK(
         flagcxTopoSetPaths(topoServer->nodes[CPU].nodes + c, topoServer));
   }
 
   // Set direct paths to GPUs.
+  INFO(FLAGCX_GRAPH, "Setting paths to APUs");
   for (int g = 0; g < topoServer->nodes[APU].count; g++) {
     FLAGCXCHECK(
         flagcxTopoSetPaths(topoServer->nodes[APU].nodes + g, topoServer));
   }
 
   // Set direct paths to NICs.
+  INFO(FLAGCX_GRAPH, "Setting paths to NICs");
+  INFO(FLAGCX_GRAPH, "net node count in setPath = [%d]",
+       topoServer->nodes[NET].count);
   for (int n = 0; n < topoServer->nodes[NET].count; n++) {
+    INFO(FLAGCX_GRAPH, "setting paths to net node [%d]", n);
     FLAGCXCHECK(
         flagcxTopoSetPaths(topoServer->nodes[NET].nodes + n, topoServer));
   }
@@ -228,4 +235,16 @@ flagcxResult_t flagcxTopoPrintPaths(struct flagcxTopoServer *topoServer) {
     printNodePaths(topoServer, topoServer->nodes[NET].nodes + i);
   }
   return flagcxSuccess;
+}
+
+void flagcxTopoFree(struct flagcxTopoServer *topoServer) {
+  flagcxTopoRemovePaths(topoServer);
+  free(topoServer);
+}
+
+void flagcxInterServerTopoFree(struct flagcxInterServerTopo *interServerTopo) {
+  for (int i = 0; i < interServerTopo->numServers; i++) {
+    flagcxTopoFree(interServerTopo->servers + i);
+  }
+  free(interServerTopo);
 }
