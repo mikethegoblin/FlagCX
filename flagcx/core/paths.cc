@@ -244,7 +244,8 @@ void flagcxTopoFree(struct flagcxTopoServer *topoServer) {
 
 void flagcxInterServerTopoFree(struct flagcxInterServerTopo *interServerTopo) {
   for (int i = 0; i < interServerTopo->numServers; i++) {
-    flagcxTopoFree(interServerTopo->servers + i);
+    flagcxTopoRemovePaths(interServerTopo->servers + i);
   }
+  free(interServerTopo->servers);
   free(interServerTopo);
 }
