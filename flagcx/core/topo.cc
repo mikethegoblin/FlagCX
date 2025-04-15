@@ -1193,8 +1193,6 @@ flagcxTopoReorderServerId(struct flatTopoServer *flatTopoServer, int nRanks) {
     // get host hash of server
     uint64_t hostHash =
         flatTopoServer[i].hostHashes[flatTopoServer[i].serverId];
-    INFO(FLAGCX_GRAPH, "FLATTEN_SERVER: hostHash of rank [%d] = [%lx]", i,
-         hostHash);
     auto it = hostHashToServerId.find(hostHash);
     if (it == hostHashToServerId.end()) {
       // assign new serverId
@@ -1247,15 +1245,12 @@ flagcxGetInterServerTopo(struct flagcxHeteroComm *comm,
   FLAGCXCHECK(flagcxCalloc(&flatServerData, nRanks));
   // we need to flatten topoServer first to remove all pointer types in the
   // structure before copying and trasferring it to other ranks
-  INFO(FLAGCX_GRAPH, "start flattening topoServer");
   FLAGCXCHECK(flattenTopoServer(topoServer, flatServerData + rank));
-  INFO(FLAGCX_GRAPH, "start bootstrapAllgather for topoServer");
   FLAGCXCHECK(bootstrapAllGather(comm->bootstrap, (void *)flatServerData,
                                  sizeof(flatTopoServer)));
   FLAGCXCHECK(bootstrapBarrier(comm->bootstrap, rank, nRanks, 0));
 
   // reorder serverId
-  INFO(FLAGCX_GRAPH, "start reordering serverId");
   FLAGCXCHECK(flagcxTopoReorderServerId(flatServerData, nRanks));
 
   // get unique flatServers
@@ -1270,20 +1265,13 @@ flagcxGetInterServerTopo(struct flagcxHeteroComm *comm,
     flatServerMap[flatServerData[i].serverId] = &flatServerData[i];
     serverCount++;
   }
-  INFO(FLAGCX_GRAPH, "unique serverCount = [%d]", serverCount);
   // unflatten the flatServers to topoServers
   flagcxTopoServer *topoServers;
   FLAGCXCHECK(flagcxCalloc(&topoServers, serverCount));
   int i = 0;
   for (auto it = flatServerMap.begin(); it != flatServerMap.end(); ++it, i++) {
     flatTopoServer *server = it->second;
-    INFO(FLAGCX_GRAPH,
-         "server hostHash = [%lx], current rank[%d] hostHash = [%lx]",
-         server->hostHashes[server->serverId], rank,
-         comm->peerInfo[comm->rank].hostHash);
     if (server->hostHashes[server->serverId] == currRankHostHash) {
-      INFO(FLAGCX_GRAPH, "reordered serverId for current server is [%d]",
-           server->serverId);
       // this is the current server, no need to flatten, but neet to change
       // serverId, and node ids
       topoServer->serverId = server->serverId;
@@ -1293,37 +1281,23 @@ flagcxGetInterServerTopo(struct flagcxHeteroComm *comm,
       FLAGCXCHECK(flagcxModifyNodeIds(topoServer, server->serverId));
       continue;
     }
-    INFO(FLAGCX_GRAPH, "start unflattening topoServer");
     FLAGCXCHECK(unflattenTopoServer(topoServers + i, server));
-    INFO(FLAGCX_GRAPH, "start modifying node ids");
     FLAGCXCHECK(flagcxModifyNodeIds(topoServers + i, server->serverId));
     // reconstruct paths because we didn't send path info in allgather
-    INFO(FLAGCX_GRAPH, "start recomputing paths");
     FLAGCXCHECK(flagcxTopoComputePaths(topoServers + i, comm));
   }
-  INFO(FLAGCX_GRAPH, "start assigning to interServer");
-  INFO(FLAGCX_GRAPH, "assigning interServer->numServers = [%d]", serverCount);
   interServer->numServers = serverCount;
-  INFO(FLAGCX_GRAPH, "assigning interServer->servers");
   interServer->servers = topoServers;
 
   // verify final topoServers
-  if (rank == 0) {
-    for (int i = 0; i < serverCount; i++) {
-      if (topoServer->serverId == i) {
-        FLAGCXCHECK(flagcxTopoPrint(topoServer));
-      } else {
-        FLAGCXCHECK(flagcxTopoPrint(topoServers + i));
-      }
-    }
-  }
-
-  // interServer->numServers = serverCount;
-  // FLAGCXCHECK(flagcxCalloc(&interServer->servers, serverCount));
-  // int i = 0;
-  // for (auto it = topoServerMap.begin(); it != topoServerMap.end(); ++it, i++)
-  // {
-  //   memcpy(interServer->servers + i, it->second, sizeof(flagcxTopoServer));
+  // if (rank == 0) {
+  //   for (int i = 0; i < serverCount; i++) {
+  //     if (topoServer->serverId == i) {
+  //       FLAGCXCHECK(flagcxTopoPrint(topoServer));
+  //     } else {
+  //       FLAGCXCHECK(flagcxTopoPrint(topoServers + i));
+  //     }
+  //   }
   // }
 
   // record all net guid and serverId mappings
