@@ -1300,6 +1300,8 @@ flagcxGetInterServerTopo(struct flagcxHeteroComm *comm,
   //   }
   // }
 
+  // TODO: read interserver topo file and construct interserver route
+
   // record all net guid and serverId mappings
   free(flatServerData);
   return flagcxSuccess;
