@@ -131,7 +131,7 @@ flagcxResult_t flagcxTopoCreateNode(struct flagcxTopoServer *topoServer,
     tempNode->cpu.vendor = FLAGCX_TOPO_UNDEF;
     tempNode->cpu.model = FLAGCX_TOPO_UNDEF;
   } else if (type == NET) {
-    tempNode->net.asic = 0ULL;
+    tempNode->net.guid = 0ULL;
     tempNode->net.port = FLAGCX_TOPO_UNDEF;
     tempNode->net.bw = 0.0;
     tempNode->net.latency = 0.0;
@@ -665,7 +665,7 @@ flagcxResult_t flagcxTopoGetXmlTopo(struct flagcxHeteroComm *comm,
     FLAGCXCHECK(xmlSetAttrInt(netNode, "speed", props.speed));
     FLAGCXCHECK(xmlSetAttrFloat(netNode, "latency", props.latency));
     FLAGCXCHECK(xmlSetAttrInt(netNode, "port", props.port));
-    FLAGCXCHECK(xmlSetAttrLong(netNode, "guid", props.guid));
+    FLAGCXCHECK(xmlInitAttrUint64(netNode, "guid", props.guid));
     FLAGCXCHECK(xmlSetAttrInt(netNode, "maxConn", props.maxComms));
   }
 
@@ -722,7 +722,15 @@ flagcxResult_t flagcxTopoAddNet(struct flagcxXmlNode *xmlNet,
                                    FLAGCX_TOPO_ID(serverId, dev)));
   net->net.dev = dev;
   int mbps;
-  FLAGCXCHECK(xmlGetAttrLong(xmlNet, "guid", &net->net.guid));
+  // FLAGCXCHECK(xmlGetAttrLong(xmlNet, "guid", &net->net.guid));
+  const char *str;
+  FLAGCXCHECK(xmlGetAttr(xmlNet, "guid", &str));
+  if (str) {
+    sscanf(str, "0x%lx", &net->net.guid);
+  } else {
+    net->net.guid = dev;
+  }
+  INFO(FLAGCX_GRAPH, "ADDING NET: net %d guid %lx", dev, net->net.guid);
   FLAGCXCHECK(xmlGetAttrIntDefault(xmlNet, "speed", &mbps, 0));
   if (mbps <= 0) {
     mbps = 10000;
@@ -978,7 +986,7 @@ static flagcxResult_t flagcxTopoPrintRec(struct flagcxTopoNode *node,
         if (link->remNode->type == NET) {
           sprintf(line + nextOffset, "Node [%s/%lx (%lx/%d/%f)]",
                   topoNodeTypeStr[link->remNode->type], link->remNode->id,
-                  link->remNode->net.asic, link->remNode->net.port,
+                  link->remNode->net.guid, link->remNode->net.port,
                   link->remNode->net.bw);
         } else {
           sprintf(line + nextOffset, "Node [%s/%lx]",
@@ -1064,8 +1072,10 @@ static flagcxResult_t flattenNode(struct flagcxTopoServer *topoServer,
     flatNode->pci.device = node->pci.device;
   } else if (node->type == NET) {
     flatNode->net.dev = node->net.dev;
-    flatNode->net.asic = node->net.asic;
+    // flatNode->net.asic = node->net.asic;
     flatNode->net.guid = node->net.guid;
+    INFO(FLAGCX_GRAPH, "FLATTEN_NET: flattenNode net guid=[%lx]",
+         node->net.guid);
     flatNode->net.port = node->net.port;
     flatNode->net.bw = node->net.bw;
     flatNode->net.latency = node->net.latency;
@@ -1092,7 +1102,6 @@ static flagcxResult_t unflattenNode(struct flagcxTopoServer *topoServer,
     node->pci.device = flatNode->pci.device;
   } else if (node->type == NET) {
     node->net.dev = flatNode->net.dev;
-    node->net.asic = flatNode->net.asic;
     node->net.guid = flatNode->net.guid;
     node->net.port = flatNode->net.port;
     node->net.bw = flatNode->net.bw;
@@ -1242,6 +1251,9 @@ fillNetToServerMap(struct flagcxInterServerTopo *interServerTopo,
     server =
         i == topoServer->serverId ? topoServer : interServerTopo->servers + i;
     for (int n = 0; n < server->nodes[NET].count; n++) {
+      INFO(FLAGCX_GRAPH,
+           "FILL_NET_TO_SERVER_MAP: net guid = [%lx], serverId = [%d]",
+           server->nodes[NET].nodes[n].net.guid, i);
       interServerTopo->netToServerMap[server->nodes[NET].nodes[n].net.guid] = i;
     }
   }
@@ -1250,7 +1262,7 @@ fillNetToServerMap(struct flagcxInterServerTopo *interServerTopo,
 
 static flagcxResult_t
 getNetNodeFromServers(struct flagcxInterServerTopo *interServerTopo,
-                      struct flagcxTopoServer *topoServer, int64_t guid,
+                      struct flagcxTopoServer *topoServer, uint64_t guid,
                       flagcxTopoNode *net) {
   int serverId = interServerTopo->netToServerMap.at(guid);
   struct flagcxTopoServer *server = serverId == topoServer->serverId
@@ -1333,10 +1345,10 @@ flagcxGetInterServerRouteFromFile(const char *xmlFile,
     // get the actual net node
     flagcxTopoNode *net1 = nullptr, *net2 = nullptr;
     int serverId1 =
-        interServerTopo->netToServerMap.at(strtol(guidNic1->value(), NULL, 0));
+        interServerTopo->netToServerMap.at(strtoul(guidNic1->value(), NULL, 0));
     INFO(FLAGCX_GRAPH, "INTERSERVER_ROUTE: serverId1 = %d", serverId1);
     int serverId2 =
-        interServerTopo->netToServerMap.at(strtol(guidNic2->value(), NULL, 0));
+        interServerTopo->netToServerMap.at(strtoul(guidNic2->value(), NULL, 0));
     INFO(FLAGCX_GRAPH, "INTERSERVER_ROUTE: serverId2 = %d", serverId2);
     if ((serverId1 != topoServer->serverId) &&
         (serverId2 != topoServer->serverId)) {
@@ -1346,10 +1358,12 @@ flagcxGetInterServerRouteFromFile(const char *xmlFile,
     struct flagcxInterServerRoute *route;
     FLAGCXCHECK(
         flagcxCalloc(&route, 1)); // remember to free this when destroying comm
-    FLAGCXCHECK(getNetNodeFromServers(
-        interServerTopo, topoServer, strtol(guidNic1->value(), NULL, 0), net1));
-    FLAGCXCHECK(getNetNodeFromServers(
-        interServerTopo, topoServer, strtol(guidNic2->value(), NULL, 0), net2));
+    FLAGCXCHECK(getNetNodeFromServers(interServerTopo, topoServer,
+                                      strtoul(guidNic1->value(), NULL, 0),
+                                      net1));
+    FLAGCXCHECK(getNetNodeFromServers(interServerTopo, topoServer,
+                                      strtoul(guidNic2->value(), NULL, 0),
+                                      net2));
     route->localNic = serverId1 == topoServer->serverId ? net1 : net2;
     route->remoteNic = serverId1 == topoServer->serverId ? net2 : net1;
 
@@ -1467,20 +1481,21 @@ flagcxGetInterServerTopo(struct flagcxHeteroComm *comm,
     FLAGCXCHECK(flagcxTopoComputePaths(topoServers + i, comm));
   }
   interServer->numServers = serverCount;
+  INFO(FLAGCX_GRAPH, "INTERSERVER_TOPO: numServers = %d", serverCount);
   interServer->servers = topoServers;
   // populate entries of netToServerIdMap
   FLAGCXCHECK(fillNetToServerMap(interServer, topoServer));
 
   // verify final topoServers
-  if (rank == 0) {
-    for (int i = 0; i < serverCount; i++) {
-      if (topoServer->serverId == i) {
-        FLAGCXCHECK(flagcxTopoPrint(topoServer));
-      } else {
-        FLAGCXCHECK(flagcxTopoPrint(topoServers + i));
-      }
-    }
-  }
+  // if (rank == 0) {
+  //   for (int i = 0; i < serverCount; i++) {
+  //     if (topoServer->serverId == i) {
+  //       FLAGCXCHECK(flagcxTopoPrint(topoServer));
+  //     } else {
+  //       FLAGCXCHECK(flagcxTopoPrint(topoServers + i));
+  //     }
+  //   }
+  // }
 
   // TODO: read interserver topo file and construct interserver route
   const char *interserverFile = flagcxGetEnv("FLAGCX_INTERSERVER_ROUTE_FILE");

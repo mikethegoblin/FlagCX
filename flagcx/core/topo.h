@@ -132,14 +132,14 @@ struct flagcxTopoNode {
     } apu;
     struct {
       int dev; // Plugin dev number
-      uint64_t asic;
+      uint64_t guid;
       int port;
       int ip;
       float bw;
       float latency;
       int gdrSupport;
       int maxConn;
-      int64_t guid;
+      // int64_t guid;
     } net;
     struct {
       int arch;
@@ -196,9 +196,10 @@ struct flagcxInterServerTopo {
   struct flagcxTopoServer
       *servers; // contain topology of all servers except current server, topo
                 // of current server is stored in comm->topoServer
-  std::unordered_map<int64_t, int> netToServerMap; // {{netGuid, serverId}, ...}
+  std::unordered_map<uint64_t, int>
+      netToServerMap; // {{netGuid, serverId}, ...}
   std::unordered_map<
-      int64_t, std::unordered_map<int64_t, struct flagcxInterServerRoute *>>
+      uint64_t, std::unordered_map<uint64_t, struct flagcxInterServerRoute *>>
       routeMap; // {{localNetGuid, {remoteNetGuid, route}}, ...}
   char interServerTopoFile[256];
 };
@@ -238,12 +239,11 @@ struct flatTopoNode {
     } apu;
     struct {
       int dev; // Plugin dev number
-      uint64_t asic;
       int port;
       float bw;
       float latency;
       int maxConn;
-      int64_t guid;
+      uint64_t guid;
     } net;
     struct {
       int arch;

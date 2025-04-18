@@ -246,6 +246,7 @@ void flagcxInterServerTopoFree(struct flagcxInterServerTopo *interServerTopo) {
   }
   free(interServerTopo->servers);
   // free interserver routes
+  INFO(FLAGCX_GRAPH, "Freeing interserver routes");
   for (auto localRankIter = interServerTopo->routeMap.begin();
        localRankIter != interServerTopo->routeMap.end(); ++localRankIter) {
     auto remoteRoutes = localRankIter->second;
@@ -254,5 +255,7 @@ void flagcxInterServerTopoFree(struct flagcxInterServerTopo *interServerTopo) {
       free(remoteRankIter->second);
     }
   }
+  INFO(FLAGCX_GRAPH, "deleting interserver topo");
   delete interServerTopo;
+  INFO(FLAGCX_GRAPH, "deleted interserver topo");
 }
