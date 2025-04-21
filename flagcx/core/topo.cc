@@ -1263,14 +1263,14 @@ fillNetToServerMap(struct flagcxInterServerTopo *interServerTopo,
 static flagcxResult_t
 getNetNodeFromServers(struct flagcxInterServerTopo *interServerTopo,
                       struct flagcxTopoServer *topoServer, uint64_t guid,
-                      flagcxTopoNode *net) {
+                      flagcxTopoNode **net) {
   int serverId = interServerTopo->netToServerMap.at(guid);
   struct flagcxTopoServer *server = serverId == topoServer->serverId
                                         ? topoServer
                                         : interServerTopo->servers + serverId;
   for (int n = 0; n < server->nodes[NET].count; n++) {
     if (server->nodes[NET].nodes[n].net.guid == guid) {
-      *net = server->nodes[NET].nodes[n];
+      *net = server->nodes[NET].nodes + n;
     }
   }
   return flagcxSuccess;
@@ -1360,10 +1360,10 @@ flagcxGetInterServerRouteFromFile(const char *xmlFile,
         flagcxCalloc(&route, 1)); // remember to free this when destroying comm
     FLAGCXCHECK(getNetNodeFromServers(interServerTopo, topoServer,
                                       strtoul(guidNic1->value(), NULL, 0),
-                                      net1));
+                                      &net1));
     FLAGCXCHECK(getNetNodeFromServers(interServerTopo, topoServer,
                                       strtoul(guidNic2->value(), NULL, 0),
-                                      net2));
+                                      &net2));
     route->localNic = serverId1 == topoServer->serverId ? net1 : net2;
     route->remoteNic = serverId1 == topoServer->serverId ? net2 : net1;
 
@@ -1496,8 +1496,6 @@ flagcxGetInterServerTopo(struct flagcxHeteroComm *comm,
   //     }
   //   }
   // }
-
-  // TODO: read interserver topo file and construct interserver route
   const char *interserverFile = flagcxGetEnv("FLAGCX_INTERSERVER_ROUTE_FILE");
   if (!interserverFile) {
     INFO(FLAGCX_ENV, "FLAGCX_INTERSERVER_ROUTE_FILE is not set");
