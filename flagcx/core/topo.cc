@@ -1021,8 +1021,9 @@ flagcxResult_t flagcxTopoGetServerTopo(struct flagcxHeteroComm *comm,
 
   FLAGCXCHECK(flagcxTopoGetXmlTopo(comm, xml));
   INFO(FLAGCX_INIT, "start converting xml to serverTopo");
-  FLAGCXCHECK(flagcxTopoGetServerTopoFromXml(
-      xml, topoServer, comm->peerInfo[comm->rank].hostHash));
+  uint64_t localHostHash = comm->peerInfo[comm->rank].hostHash -
+                           comm->commHash; // do not consider commHash here
+  FLAGCXCHECK(flagcxTopoGetServerTopoFromXml(xml, topoServer, localHostHash));
 
   free(xml);
   return flagcxSuccess;
