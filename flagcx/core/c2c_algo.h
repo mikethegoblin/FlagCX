@@ -148,6 +148,8 @@ public:
   flagcxResult_t run(void *buff, flagcxDataType_t datatype, flagcxComm_t comm,
                      flagcxStream_t stream);
 
+  inline std::vector<flagcxC2cP2pOp> &getP2pOps() { return p2pOps_; }
+
 private:
   std::vector<flagcxC2cP2pOp> p2pOps_;
 };
