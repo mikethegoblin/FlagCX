@@ -1392,23 +1392,22 @@ flagcxGetInterServerRouteFromFile(const char *xmlFile,
     int serverId2 =
         interServerTopo->netToServerMap.at(strtoul(guidNic2->value(), NULL, 0));
     INFO(FLAGCX_GRAPH, "INTERSERVER_ROUTE: serverId2 = %d", serverId2);
-    if ((serverId1 != topoServer->serverId) &&
-        (serverId2 != topoServer->serverId)) {
-      // we only record routes from this server
-      // TODO: we might need to record routes for all servers
-      continue;
-    }
+
     struct flagcxInterServerRoute *route;
+    struct flagcxInterServerRoute *reverseRoute;
     FLAGCXCHECK(
         flagcxCalloc(&route, 1)); // remember to free this when destroying comm
+    FLAGCXCHECK(flagcxCalloc(&reverseRoute, 1));
     FLAGCXCHECK(getNetNodeFromServers(interServerTopo, topoServer,
                                       strtoul(guidNic1->value(), NULL, 0),
                                       &net1));
     FLAGCXCHECK(getNetNodeFromServers(interServerTopo, topoServer,
                                       strtoul(guidNic2->value(), NULL, 0),
                                       &net2));
-    route->localNic = serverId1 == topoServer->serverId ? net1 : net2;
-    route->remoteNic = serverId1 == topoServer->serverId ? net2 : net1;
+    route->localNic = net1;
+    route->remoteNic = net2;
+    reverseRoute->localNic = net2;
+    reverseRoute->remoteNic = net1;
 
     // parse interswitch
     rapidxml::xml_node<> *interSwitchNode = pairNode->first_node("interSwitch");
@@ -1423,6 +1422,7 @@ flagcxGetInterServerRouteFromFile(const char *xmlFile,
       return flagcxInternalError;
     }
     route->switchCount = strtol(countAttr->value(), NULL, 0);
+    reverseRoute->switchCount = route->switchCount;
     INFO(FLAGCX_GRAPH, "INTERSERVER_ROUTE: switchCount = %d",
          route->switchCount);
     int switchIdx = 0;
@@ -1431,6 +1431,8 @@ flagcxGetInterServerRouteFromFile(const char *xmlFile,
          switchNode;
          switchNode = switchNode->next_sibling("switch"), switchIdx++) {
       flagcxSwitch *interSwitch = route->switchInfos + switchIdx;
+      // we don't record interSwitch info for reverseRoute to save space
+      // also, interswitch info is only used to compute route bandwidth
       rapidxml::xml_attribute<> *downBwAttr =
           switchNode->first_attribute("downBw");
       rapidxml::xml_attribute<> *upBwAttr = switchNode->first_attribute("upBw");
@@ -1458,10 +1460,13 @@ flagcxGetInterServerRouteFromFile(const char *xmlFile,
     float effectiveBw;
     FLAGCXCHECK(getEffectiveBw(route, &effectiveBw));
     route->interBw = effectiveBw;
+    reverseRoute->interBw = effectiveBw;
     INFO(FLAGCX_GRAPH, "INTERSERVER_ROUTE: effectiveBw = %f", effectiveBw);
     interServerTopo
         ->routeMap[route->localNic->net.guid][route->remoteNic->net.guid] =
         route;
+    interServerTopo->routeMap[reverseRoute->localNic->net.guid]
+                             [reverseRoute->remoteNic->net.guid] = reverseRoute;
   }
   return flagcxSuccess;
 }
