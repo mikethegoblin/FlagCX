@@ -19,6 +19,8 @@ flagcxResult_t FlagCXAlgoTimeEstimator::GetPreHomoAlgoTime(float *time) {
   auto &preHomoFuncs =
       planner_.getPreHomoFuncs(); // all clusters perform the same algo
   float totalPreHomoTime = 0.0;
+  // compute the execution time for all clusters
+  // use the max time for all clusters
   for (int i = 0; i < comm->nclusters; i++) {
     int vendor = comm->clusterVendorMap[i];
     int clusterRankSize =
@@ -40,6 +42,8 @@ flagcxResult_t FlagCXAlgoTimeEstimator::GetPostHomoAlgoTime(float *time) {
   flagcxComm_t comm = planner_.getComm();
   auto &postHomoFuncs = planner_.getPostHomoFuncs();
   float totalPostHomoTime = 0.0;
+  // compute the execution time for all clusters
+  // use the max time for all clusters
   for (int i = 0; i < comm->nclusters; i++) {
     int vendor = comm->clusterVendorMap[i];
     int clusterRankSize =
@@ -70,6 +74,8 @@ flagcxResult_t FlagCXAlgoTimeEstimator::GetHomoInterAlgoTime(int loop,
   auto &homoFunc = planner_.getHomoInterFuncs()[loop];
   // getHomoAlgoTime
   float totalHomoInterTime = 0.0;
+  // compute the execution time for all clusters
+  // use the max time for all clusters
   for (int i = 0; i < comm->nclusters; i++) {
     int vendor = comm->clusterVendorMap[i];
     int clusterInterRankSize = planner_.getClusterInterRankList()[i].size();
@@ -89,14 +95,16 @@ float FlagCXAlgoTimeEstimator::GetRefreshTime() {
 flagcxResult_t FlagCXAlgoTimeEstimator::GetHeteroAlgoTime(float *time) {
   flagcxComm_t comm = planner_.getComm();
   flagcxHeteroComm_t heteroComm = comm->hetero_comm;
-  // filter out hetero funcs for each rank (for each nic)
+  // filter out hetero funcs for each rank
   std::unordered_map<int, std::vector<flagcxC2cHeteroFunc>> heteroFuncMap;
   int heteroFuncLoops = planner_.getHeteroAndHomoInterFuncLoops();
   auto &clusterInterRankList = planner_.getClusterInterRankList();
   auto &interRankBufferInfoManager = planner_.getInterRankBufferInfoManager();
   // get all interRanks
   std::vector<int> interRanks;
-  std::unordered_map<uint64_t, std::vector<int>> nicRankMap;
+  std::unordered_map<uint64_t, std::vector<int>>
+      nicRankMap; // {nicGuid: vector<rankId>} record the ranks that share the
+                  // same nic
   for (size_t j = 0; j < clusterInterRankList.size(); j++) {
     for (size_t z = 0; z < clusterInterRankList[j].size(); z++) {
       int rank = clusterInterRankList[j][z];
@@ -133,7 +141,7 @@ flagcxResult_t FlagCXAlgoTimeEstimator::GetHeteroAlgoTime(float *time) {
   }
   float totalTime = 0.0;
   for (int i = 0; i < heteroFuncLoops; i++) {
-    // get total send/recv time for each nic
+    // get total send/recv time for each nic in case multiple gpus share a nic
     float timePerLoop = 0.0;
     timePerLoop += GetRefreshTime();
     float sendRecvTime = 0.0;
@@ -208,14 +216,17 @@ float FlagCXAlgoTimeEstimator::GetSendRecvTime(float curClusterLat,
                                                float remoteClusterLat, float bw,
                                                int totalCount,
                                                size_t chunkSize) {
-  float lat = std::max(curClusterLat, remoteClusterLat);
+  // in the current implementation, chunks are sent in serial order
+  float lat =
+      std::max(curClusterLat,
+               remoteClusterLat); // use the higher latency between two clusters
   size_t bytes = totalCount * getFlagcxDataTypeSize(datatype);
   int steps = (bytes + chunkSize - 1) / chunkSize;
   float time = 0.0;
   int sizeSent = 0;
   for (int s = 0; s < steps; s++) {
     size_t sendSize = std::min(chunkSize, bytes - sizeSent);
-    time += lat + sendSize / (1000 * bw); // convert to us
+    time += lat + sendSize / (1000 * bw); // convert to us (bw in GB/s)
     sizeSent += sendSize;
   }
   return time;
