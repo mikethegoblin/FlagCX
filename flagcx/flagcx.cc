@@ -261,6 +261,10 @@ flagcxResult_t flagcxCommInitRank(flagcxComm_t *comm, int nranks,
   (*comm)->cluster_ids = clusterIdData;
   (*comm)->globalrank2homorank = globalRankToHomoRankData;
 
+  // fill clusterVendorMap
+  FLAGCXCHECK(flagcxFillClusterVendorInfo(vendorData, (*comm), clusterIdData,
+                                          nranks, (*comm)->nclusters));
+
   int *clusterSizes;
   int *clusterInterRanks;
   FLAGCXCHECK(flagcxCalloc(&clusterSizes, (*comm)->nclusters));

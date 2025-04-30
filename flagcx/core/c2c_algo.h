@@ -188,6 +188,38 @@ public:
                          flagcxDataType_t datatype, int root,
                          flagcxStream_t stream);
 
+  inline std::vector<flagcxC2cHomoFunc> &getPreHomoFuncs() {
+    return preHomoFuncList_;
+  }
+
+  inline std::vector<flagcxC2cHeteroFunc> &getHeteroFuncs() {
+    return heteroFuncList_;
+  }
+
+  inline std::vector<flagcxC2cHomoFunc> &getHomoInterFuncs() {
+    return homoInterFuncList_;
+  }
+
+  inline std::vector<flagcxC2cHomoFunc> &getPostHomoFuncs() {
+    return postHomoFuncList_;
+  }
+
+  inline int &getRank() { return rank_; }
+
+  inline flagcxComm_t getComm() { return comm_; }
+
+  inline int getHeteroAndHomoInterFuncLoops() {
+    return heteroAndHomoInterFuncLoops_;
+  }
+
+  inline std::vector<std::vector<int>> &getClusterInterRankList() {
+    return clusterInterRankList_;
+  }
+
+  inline flagcxInterRankBufferInfoManager &getInterRankBufferInfoManager() {
+    return interRankBufferInfoManager_;
+  }
+
 private:
   int totalCount_; // equal to sendCount_
   int recvCount_;

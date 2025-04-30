@@ -17,29 +17,42 @@
 //     float latency[2];
 // };
 
+constexpr int FLAGCX_INTRA_LAT_IDX = 0;
+constexpr int FLAGCX_INTER_LAT_IDX = 1;
+
+#define FLAGCX_VENDOR_NUM 3
+
 class FlagCXAlgoTimeEstimator {
 public:
-  FlagCXAlgoTimeEstimator(flagcxDataType_t dt, int preHomoFuncLoops,
-                          int heteroAndPostHomoFuncLoops,
-                          std::vector<flagcxC2cHomoFunc> &preHomoFuncs,
-                          std::vector<flagcxC2cHeteroFunc> &heteroFuncs,
-                          std::vector<flagcxC2cHomoFunc> &postHomoFuncs,
-                          struct flagcxHeteroComm *comm)
-      : datatype_(dt), preHomoFuncs_(preHomoFuncs), heteroFuncs_(heteroFuncs),
-        postHomoFuncs_(postHomoFuncs), comm_(comm) {}
+  FlagCXAlgoTimeEstimator(flagcxC2cPlanner &planner, flagcxDataType_t dtype)
+      : planner_(planner), datatype(dtype) {}
 
-  float GetAlgoTime();
+  flagcxResult_t GetAlgoTime(float *time);
 
 private:
-  float GetHomoAlgoTime();
+  flagcxResult_t GetPreHomoAlgoTime(float *time);
 
-  float GetHeteroAlgoTime();
+  flagcxResult_t GetPostHomoAlgoTime(float *time);
 
-  flagcxDataType_t datatype_;
-  std::vector<flagcxC2cHomoFunc> &preHomoFuncs_;
-  std::vector<flagcxC2cHeteroFunc> &heteroFuncs_;
-  std::vector<flagcxC2cHomoFunc> &postHomoFuncs_;
-  struct flagcxHeteroComm *comm_;
+  flagcxResult_t GetHomoAlgoTime(flagcxC2cHomoFunc &homoFunc, int rankSize,
+                                 int vendor, float *time);
+
+  flagcxResult_t GetHeteroAlgoTime(float *time);
+
+  flagcxResult_t GetHomoInterAlgoTime(int loop, float *time);
+
+  float GetP2pTimePerNic(
+      uint64_t netGuid,
+      std::unordered_map<uint64_t, std::vector<int>> &nicRankMap,
+      std::unordered_map<int, std::vector<flagcxC2cHeteroFunc>> &heteroFuncMap);
+
+  float GetRefreshTime();
+
+  float GetSendRecvTime(float curClusterLat, float remoteClusterLat, float bw,
+                        int totalCount, size_t chunkSize);
+
+  flagcxC2cPlanner &planner_;
+  flagcxDataType_t datatype;
 };
 
 #endif

@@ -492,6 +492,30 @@ flagcxResult_t flagcxTopoGetLocalNet(struct flagcxTopoServer *topoServer,
   return flagcxSuccess;
 }
 
+flagcxResult_t flagcxTopoGetLocalNetNode(struct flagcxTopoServer *topoServer,
+                                         int rank,
+                                         struct flagcxTopoNode **netNode) {
+  int apu;
+  FLAGCXCHECK(flagcxTopoRankToIndex(topoServer, rank, &apu));
+
+  int localNets[FLAGCX_TOPO_MAX_NODES];
+  int localNetCount;
+  FLAGCXCHECK(flagcxTopoGetLocal(topoServer, APU, apu, NET, localNets,
+                                 &localNetCount, NULL));
+  if (localNetCount == 0) {
+    WARN("Could not find any local path from apu %d to net", apu);
+    return flagcxInternalError;
+  }
+
+  INFO(FLAGCX_GRAPH, "found %d local nets for apu %d", localNetCount, apu);
+  int net = topoServer->nodes[APU].nodes[apu].apu.dev;
+  if (isPow2(localNetCount)) { // load balance across apus
+    net = mirrorBits(net, localNetCount);
+  }
+  *netNode = &(topoServer->nodes[NET].nodes[localNets[net % localNetCount]]);
+  return flagcxSuccess;
+}
+
 flagcxResult_t flagcxGetLocalNetFromGpu(int apu, int *dev,
                                         struct flagcxHeteroComm *comm) {
   char name[FLAGCX_MAX_NET_NAME + 1] = {0};
@@ -1371,6 +1395,7 @@ flagcxGetInterServerRouteFromFile(const char *xmlFile,
     if ((serverId1 != topoServer->serverId) &&
         (serverId2 != topoServer->serverId)) {
       // we only record routes from this server
+      // TODO: we might need to record routes for all servers
       continue;
     }
     struct flagcxInterServerRoute *route;
@@ -1528,4 +1553,21 @@ flagcxGetInterServerTopo(struct flagcxHeteroComm *comm,
 exit:
   free(flatServerData);
   return ret;
+}
+
+flagcxResult_t
+flagcxTopoGetServerFromRank(int rank, struct flagcxInterServerTopo *interServer,
+                            struct flagcxTopoServer *currServer,
+                            struct flagcxTopoServer **retServer) {
+  for (int i = 0; i < interServer->numServers; i++) {
+    struct flagcxTopoServer *server =
+        i == currServer->serverId ? currServer : interServer->servers + i;
+    for (int n = 0; n < server->nodes[APU].count; n++) {
+      if (server->nodes[APU].nodes[n].apu.rank == rank) {
+        *retServer = server;
+        return flagcxSuccess;
+      }
+    }
+  }
+  return flagcxInternalError;
 }

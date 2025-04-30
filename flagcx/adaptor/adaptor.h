@@ -106,6 +106,12 @@ typedef struct {
   char internal[MAX_VENDOR_LEN];
 } flagcxVendor;
 
+typedef enum {
+  FLAGCX_VENDOR_NVIDIA = 0,
+  FLAGCX_VENDOR_ILUVATAR_COREX = 1,
+  FLAGCX_VENDOR_MLU = 2,
+} flagcxVendorType;
+
 struct flagcxDeviceAdaptor {
   char name[32];
   // Basic functions
