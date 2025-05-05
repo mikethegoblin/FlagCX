@@ -6,6 +6,7 @@
 #include "check.h"
 #include "cluster.h"
 #include "comm.h"
+#include "cost_model.h"
 #include "flagcx_hetero.h"
 #include "param.h"
 
@@ -1190,6 +1191,9 @@ flagcxResult_t flagcxAllReduce(const void *sendbuff, void *recvbuff,
             flagcxC2cPlanner(count, count, comm, flagcxCommOpAllReduce, op);
         FLAGCXCHECK(planner.findStrategy());
         planCache.put(hashValue, planner);
+        FlagCXAlgoTimeEstimator estimator(planner, datatype);
+        float time = 0.0;
+        FLAGCXCHECK(estimator.GetAlgoTime(&time));
       } else {
         INFO(FLAGCX_COLL,
              "Found available planwith communication pattern "

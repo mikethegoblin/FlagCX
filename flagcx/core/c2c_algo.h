@@ -220,6 +220,10 @@ public:
     return interRankBufferInfoManager_;
   }
 
+  inline bool isMultiNic() { return multiNic_; }
+
+  inline int getTotalCount() { return totalCount_; }
+
 private:
   int totalCount_; // equal to sendCount_
   int recvCount_;

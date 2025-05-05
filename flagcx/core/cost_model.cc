@@ -3,12 +3,15 @@
 
 constexpr size_t CHUNK_SIZE = 4ULL * 1024 * 1024;
 const float flagcxLatMap[FLAGCX_VENDOR_NUM][2] = {
-    {0.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}};
+    {0.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}};
 
 flagcxResult_t FlagCXAlgoTimeEstimator::GetAlgoTime(float *time) {
   float preHomoTime, heteroTime, postHomoTime;
+  INFO(FLAGCX_GRAPH, "COST_MODEL: getting time for prehomo funcs");
   FLAGCXCHECK(GetPreHomoAlgoTime(&preHomoTime));
+  INFO(FLAGCX_GRAPH, "COST_MODEL: getting time for hetero funcs");
   FLAGCXCHECK(GetHeteroAlgoTime(&heteroTime));
+  INFO(FLAGCX_GRAPH, "COST_MODEL: getting time for posthomo funcs");
   FLAGCXCHECK(GetPostHomoAlgoTime(&postHomoTime));
   *time = preHomoTime + heteroTime + postHomoTime;
   return flagcxSuccess;
@@ -99,12 +102,12 @@ flagcxResult_t FlagCXAlgoTimeEstimator::GetHeteroAlgoTime(float *time) {
   std::unordered_map<int, std::vector<flagcxC2cHeteroFunc>> heteroFuncMap;
   int heteroFuncLoops = planner_.getHeteroAndHomoInterFuncLoops();
   auto &clusterInterRankList = planner_.getClusterInterRankList();
-  auto &interRankBufferInfoManager = planner_.getInterRankBufferInfoManager();
   // get all interRanks
   std::vector<int> interRanks;
   std::unordered_map<uint64_t, std::vector<int>>
       nicRankMap; // {nicGuid: vector<rankId>} record the ranks that share the
                   // same nic
+  INFO(FLAGCX_GRAPH, "COST_MODEL: fill nicRankMap");
   for (size_t j = 0; j < clusterInterRankList.size(); j++) {
     for (size_t z = 0; z < clusterInterRankList[j].size(); z++) {
       int rank = clusterInterRankList[j][z];
@@ -116,31 +119,28 @@ flagcxResult_t FlagCXAlgoTimeEstimator::GetHeteroAlgoTime(float *time) {
                                               heteroComm->topoServer, &server));
       // get local nic used by current rank
       FLAGCXCHECK(flagcxTopoGetLocalNetNode(server, rank, &net));
+      INFO(FLAGCX_GRAPH, "COST_MODEL: nicRankMap[%lx] = %d", net->net.guid,
+           rank);
       nicRankMap[net->net.guid].push_back(rank);
     }
   }
+  INFO(FLAGCX_GRAPH, "COST_MODEL: interRanks size = %lu", interRanks.size());
   for (int &rank : interRanks) {
+    INFO(FLAGCX_GRAPH, "COST_MODEL: generating heteroFunc for rank %d", rank);
     heteroFuncMap[rank].resize(heteroFuncLoops);
     for (int i = 0; i < heteroFuncLoops; i++) {
+      INFO(FLAGCX_GRAPH, "COST_MODEL: heteroFunc generation loop %d", i);
       flagcxC2cHeteroFunc &heteroFunc = heteroFuncMap[rank][i];
-      for (size_t j = 0; j < clusterInterRankList.size(); j++) {
-        for (size_t z = 0; z < clusterInterRankList[j].size(); z++) {
-          if (rank == clusterInterRankList[j][z]) {
-            auto &rankList =
-                interRankBufferInfoManager.getBufferInfoList(j, rank);
-            for (auto it = rankList.begin(); it != rankList.end(); it++) {
-              if (it->loopId_ == i) {
-                heteroFunc.addP2pOp(rank, it->peerRank_, it->offset_,
-                                    it->count_, it->isRecv_);
-              }
-            }
-          }
-        }
+      if (planner_.isMultiNic()) {
+        GenerateHeteroFuncForMultiNic(rank, i, heteroFunc);
+      } else {
+        GenerateHeteroFuncForSingleNic(rank, heteroFunc);
       }
     }
   }
   float totalTime = 0.0;
   for (int i = 0; i < heteroFuncLoops; i++) {
+    INFO(FLAGCX_GRAPH, "COST_MODEL: heteroFunc loop %d", i);
     // get total send/recv time for each nic in case multiple gpus share a nic
     float timePerLoop = 0.0;
     timePerLoop += GetRefreshTime();
@@ -153,6 +153,7 @@ flagcxResult_t FlagCXAlgoTimeEstimator::GetHeteroAlgoTime(float *time) {
     }
     timePerLoop += sendRecvTime;
     float homoInterTime = 0.0;
+    INFO(FLAGCX_GRAPH, "COST_MODEL: getting homoInter time for loop %d", i);
     FLAGCXCHECK(GetHomoInterAlgoTime(i, &homoInterTime));
     timePerLoop += homoInterTime;
     totalTime += timePerLoop;
@@ -161,6 +162,63 @@ flagcxResult_t FlagCXAlgoTimeEstimator::GetHeteroAlgoTime(float *time) {
   *time = totalTime;
 
   return flagcxSuccess;
+}
+
+void FlagCXAlgoTimeEstimator::GenerateHeteroFuncForMultiNic(
+    int rank, int loop, flagcxC2cHeteroFunc &heteroFunc) {
+  auto &clusterInterRankList = planner_.getClusterInterRankList();
+  auto &interRankBufferInfoManager = planner_.getInterRankBufferInfoManager();
+  for (size_t j = 0; j < clusterInterRankList.size(); j++) {
+    for (size_t z = 0; z < clusterInterRankList[j].size(); z++) {
+      if (rank == clusterInterRankList[j][z]) {
+        auto &rankList = interRankBufferInfoManager.getBufferInfoList(j, rank);
+        INFO(FLAGCX_GRAPH, "COST_MODEL: rankList size = %lu", rankList.size());
+        for (auto it = rankList.begin(); it != rankList.end(); it++) {
+          if (it->loopId_ == loop) {
+            INFO(FLAGCX_GRAPH, "COST_MODEL: heteroFunc addP2pOp");
+            heteroFunc.addP2pOp(rank, it->peerRank_, it->offset_, it->count_,
+                                it->isRecv_);
+          }
+        }
+      }
+    }
+  }
+}
+
+void FlagCXAlgoTimeEstimator::GenerateHeteroFuncForSingleNic(
+    int rank, flagcxC2cHeteroFunc &heteroFunc) {
+  flagcxComm_t comm = planner_.getComm();
+  auto &clusterInterRankList = planner_.getClusterInterRankList();
+  int cid = 0;
+  int clusterId = comm->cluster_ids[rank];
+  int homoMyRank = comm->globalrank2homorank[rank];
+  int homoRanks = comm->cluster_sizes[clusterId];
+  int totalCount = planner_.getTotalCount();
+  for (size_t j = 0; j < clusterInterRankList.size(); ++j) {
+    if (clusterId == j) {
+      continue;
+    }
+    int homoRankToRecvFromCluster =
+        (comm->globalrank2homorank[clusterInterRankList[clusterId][0]] - cid -
+         1 + homoRanks) %
+        homoRanks;
+    if (homoMyRank == homoRankToRecvFromCluster) {
+      heteroFunc.addP2pOp(rank, clusterInterRankList[j][0], 0, totalCount, 1);
+    }
+    int homoRankToSendToCluster =
+        (comm->globalrank2homorank[clusterInterRankList[j][0]] - cid - 1 +
+         comm->cluster_sizes[j]) %
+        comm->cluster_sizes[j];
+    int globalRankToSendToCluster =
+        homoRankToSendToCluster -
+        comm->globalrank2homorank[clusterInterRankList[j][0]] +
+        clusterInterRankList[j][0];
+    if (homoMyRank ==
+        comm->globalrank2homorank[clusterInterRankList[clusterId][0]]) {
+      heteroFunc.addP2pOp(rank, globalRankToSendToCluster, 0, totalCount, 0);
+    }
+    cid += 1;
+  }
 }
 
 float FlagCXAlgoTimeEstimator::GetP2pTimePerNic(
@@ -188,16 +246,19 @@ float FlagCXAlgoTimeEstimator::GetP2pTimePerNic(
         float remoteClusterLat =
             flagcxLatMap[remoteVendor][FLAGCX_INTER_LAT_IDX];
         // get nic of remote rank
-        struct flagcxTopoServer *server;
-        struct flagcxTopoNode *net;
+        struct flagcxTopoServer *remoteServer;
+        struct flagcxTopoNode *remoteNet;
         // get server of current rank
         FLAGCXCHECK(
-            flagcxTopoGetServerFromRank(rank, heteroComm->interServerTopo,
-                                        heteroComm->topoServer, &server));
+            flagcxTopoGetServerFromRank(remoteRank, heteroComm->interServerTopo,
+                                        heteroComm->topoServer, &remoteServer));
         // get local nic used by current rank
-        FLAGCXCHECK(flagcxTopoGetLocalNetNode(server, rank, &net));
+        FLAGCXCHECK(
+            flagcxTopoGetLocalNetNode(remoteServer, remoteRank, &remoteNet));
+        INFO(FLAGCX_GRAPH, "COST_MODEL: localNet = %lx, remoteNet = %lx",
+             remoteNet->net.guid, netGuid);
         float routeBw =
-            heteroComm->interServerTopo->routeMap[netGuid][net->net.guid]
+            heteroComm->interServerTopo->routeMap[netGuid][remoteNet->net.guid]
                 ->interBw; // we haven't recorded all route for all servers yet
         if (p2pOp.isRecv_) {
           recvTime += GetSendRecvTime(curClusterLat, remoteClusterLat, routeBw,

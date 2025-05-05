@@ -20,7 +20,7 @@
 constexpr int FLAGCX_INTRA_LAT_IDX = 0;
 constexpr int FLAGCX_INTER_LAT_IDX = 1;
 
-#define FLAGCX_VENDOR_NUM 3
+#define FLAGCX_VENDOR_NUM 4
 
 class FlagCXAlgoTimeEstimator {
 public:
@@ -40,6 +40,12 @@ private:
   flagcxResult_t GetHeteroAlgoTime(float *time);
 
   flagcxResult_t GetHomoInterAlgoTime(int loop, float *time);
+
+  void GenerateHeteroFuncForMultiNic(int rank, int loop,
+                                     flagcxC2cHeteroFunc &heteroFunc);
+
+  void GenerateHeteroFuncForSingleNic(int rank,
+                                      flagcxC2cHeteroFunc &heteroFunc);
 
   float GetP2pTimePerNic(
       uint64_t netGuid,
