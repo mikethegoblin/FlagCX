@@ -1191,9 +1191,9 @@ flagcxResult_t flagcxAllReduce(const void *sendbuff, void *recvbuff,
             flagcxC2cPlanner(count, count, comm, flagcxCommOpAllReduce, op);
         FLAGCXCHECK(planner.findStrategy());
         planCache.put(hashValue, planner);
-        FlagCXAlgoTimeEstimator estimator(planner, datatype);
+        flagcxAlgoTimeEstimator estimator(planner, datatype);
         float time = 0.0;
-        FLAGCXCHECK(estimator.GetAlgoTime(&time));
+        FLAGCXCHECK(estimator.getAlgoTime(&time));
       } else {
         INFO(FLAGCX_COLL,
              "Found available planwith communication pattern "

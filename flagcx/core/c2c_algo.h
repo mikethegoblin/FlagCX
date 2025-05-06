@@ -172,6 +172,7 @@ public:
 
 class flagcxC2cPlanner {
 public:
+  friend class flagcxAlgoTimeEstimator;
   flagcxC2cPlanner(int totalCount, int recvCount, flagcxComm_t comm,
                    flagcxCommOp_t commOp, flagcxRedOp_t redOp);
   ~flagcxC2cPlanner();
@@ -187,42 +188,6 @@ public:
   flagcxResult_t execute(const void *sendbuff, void *recvbuff,
                          flagcxDataType_t datatype, int root,
                          flagcxStream_t stream);
-
-  inline std::vector<flagcxC2cHomoFunc> &getPreHomoFuncs() {
-    return preHomoFuncList_;
-  }
-
-  inline std::vector<flagcxC2cHeteroFunc> &getHeteroFuncs() {
-    return heteroFuncList_;
-  }
-
-  inline std::vector<flagcxC2cHomoFunc> &getHomoInterFuncs() {
-    return homoInterFuncList_;
-  }
-
-  inline std::vector<flagcxC2cHomoFunc> &getPostHomoFuncs() {
-    return postHomoFuncList_;
-  }
-
-  inline int &getRank() { return rank_; }
-
-  inline flagcxComm_t getComm() { return comm_; }
-
-  inline int getHeteroAndHomoInterFuncLoops() {
-    return heteroAndHomoInterFuncLoops_;
-  }
-
-  inline std::vector<std::vector<int>> &getClusterInterRankList() {
-    return clusterInterRankList_;
-  }
-
-  inline flagcxInterRankBufferInfoManager &getInterRankBufferInfoManager() {
-    return interRankBufferInfoManager_;
-  }
-
-  inline bool isMultiNic() { return multiNic_; }
-
-  inline int getTotalCount() { return totalCount_; }
 
 private:
   int totalCount_; // equal to sendCount_

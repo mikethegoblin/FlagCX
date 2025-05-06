@@ -22,39 +22,39 @@ constexpr int FLAGCX_INTER_LAT_IDX = 1;
 
 #define FLAGCX_VENDOR_NUM 4
 
-class FlagCXAlgoTimeEstimator {
+class flagcxAlgoTimeEstimator {
 public:
-  FlagCXAlgoTimeEstimator(flagcxC2cPlanner &planner, flagcxDataType_t dtype)
+  flagcxAlgoTimeEstimator(flagcxC2cPlanner &planner, flagcxDataType_t dtype)
       : planner_(planner), datatype(dtype) {}
 
-  flagcxResult_t GetAlgoTime(float *time);
+  flagcxResult_t getAlgoTime(float *time);
 
 private:
-  flagcxResult_t GetPreHomoAlgoTime(float *time);
+  flagcxResult_t getPreHomoAlgoTime(float *time);
 
-  flagcxResult_t GetPostHomoAlgoTime(float *time);
+  flagcxResult_t getPostHomoAlgoTime(float *time);
 
-  flagcxResult_t GetHomoAlgoTime(flagcxC2cHomoFunc &homoFunc, int rankSize,
+  flagcxResult_t getHomoAlgoTime(flagcxC2cHomoFunc &homoFunc, int rankSize,
                                  int vendor, float *time);
 
-  flagcxResult_t GetHeteroAlgoTime(float *time);
+  flagcxResult_t getHeteroAlgoTime(float *time);
 
-  flagcxResult_t GetHomoInterAlgoTime(int loop, float *time);
+  flagcxResult_t getHomoInterAlgoTime(int loop, float *time);
 
-  void GenerateHeteroFuncForMultiNic(int rank, int loop,
+  void generateHeteroFuncForMultiNic(int rank, int loop,
                                      flagcxC2cHeteroFunc &heteroFunc);
 
-  void GenerateHeteroFuncForSingleNic(int rank,
+  void generateHeteroFuncForSingleNic(int rank,
                                       flagcxC2cHeteroFunc &heteroFunc);
 
-  float GetP2pTimePerNic(
+  float getP2pTimePerNic(
       uint64_t netGuid,
       std::unordered_map<uint64_t, std::vector<int>> &nicRankMap,
       std::unordered_map<int, std::vector<flagcxC2cHeteroFunc>> &heteroFuncMap);
 
-  float GetRefreshTime();
+  float getRefreshTime();
 
-  float GetSendRecvTime(float curClusterLat, float remoteClusterLat, float bw,
+  float getSendRecvTime(float curClusterLat, float remoteClusterLat, float bw,
                         int totalCount, size_t chunkSize);
 
   flagcxC2cPlanner &planner_;

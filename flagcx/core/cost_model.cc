@@ -5,22 +5,22 @@ constexpr size_t CHUNK_SIZE = 4ULL * 1024 * 1024;
 const float flagcxLatMap[FLAGCX_VENDOR_NUM][2] = {
     {0.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}};
 
-flagcxResult_t FlagCXAlgoTimeEstimator::GetAlgoTime(float *time) {
+flagcxResult_t flagcxAlgoTimeEstimator::getAlgoTime(float *time) {
   float preHomoTime, heteroTime, postHomoTime;
   INFO(FLAGCX_GRAPH, "COST_MODEL: getting time for prehomo funcs");
-  FLAGCXCHECK(GetPreHomoAlgoTime(&preHomoTime));
+  FLAGCXCHECK(getPreHomoAlgoTime(&preHomoTime));
   INFO(FLAGCX_GRAPH, "COST_MODEL: getting time for hetero funcs");
-  FLAGCXCHECK(GetHeteroAlgoTime(&heteroTime));
+  FLAGCXCHECK(getHeteroAlgoTime(&heteroTime));
   INFO(FLAGCX_GRAPH, "COST_MODEL: getting time for posthomo funcs");
-  FLAGCXCHECK(GetPostHomoAlgoTime(&postHomoTime));
+  FLAGCXCHECK(getPostHomoAlgoTime(&postHomoTime));
   *time = preHomoTime + heteroTime + postHomoTime;
   return flagcxSuccess;
 }
 
-flagcxResult_t FlagCXAlgoTimeEstimator::GetPreHomoAlgoTime(float *time) {
-  flagcxComm_t comm = planner_.getComm();
+flagcxResult_t flagcxAlgoTimeEstimator::getPreHomoAlgoTime(float *time) {
+  flagcxComm_t comm = planner_.comm_;
   auto &preHomoFuncs =
-      planner_.getPreHomoFuncs(); // all clusters perform the same algo
+      planner_.preHomoFuncList_; // all clusters perform the same algo
   float totalPreHomoTime = 0.0;
   // compute the execution time for all clusters
   // use the max time for all clusters
@@ -31,7 +31,7 @@ flagcxResult_t FlagCXAlgoTimeEstimator::GetPreHomoAlgoTime(float *time) {
     float preHomoTimeForCluster = 0.0;
     for (auto &func : preHomoFuncs) {
       float algoTime = 0.0;
-      FLAGCXCHECK(GetHomoAlgoTime(func, clusterRankSize, vendor, &algoTime));
+      FLAGCXCHECK(getHomoAlgoTime(func, clusterRankSize, vendor, &algoTime));
       preHomoTimeForCluster += algoTime;
     }
     // get the max time for all clusters
@@ -41,9 +41,9 @@ flagcxResult_t FlagCXAlgoTimeEstimator::GetPreHomoAlgoTime(float *time) {
   return flagcxSuccess;
 }
 
-flagcxResult_t FlagCXAlgoTimeEstimator::GetPostHomoAlgoTime(float *time) {
-  flagcxComm_t comm = planner_.getComm();
-  auto &postHomoFuncs = planner_.getPostHomoFuncs();
+flagcxResult_t flagcxAlgoTimeEstimator::getPostHomoAlgoTime(float *time) {
+  flagcxComm_t comm = planner_.comm_;
+  auto &postHomoFuncs = planner_.postHomoFuncList_;
   float totalPostHomoTime = 0.0;
   // compute the execution time for all clusters
   // use the max time for all clusters
@@ -54,7 +54,7 @@ flagcxResult_t FlagCXAlgoTimeEstimator::GetPostHomoAlgoTime(float *time) {
     float postHomoTimeForCluster = 0.0;
     for (auto &func : postHomoFuncs) {
       float algoTime = 0.0;
-      FLAGCXCHECK(GetHomoAlgoTime(func, clusterRankSize, vendor, &algoTime));
+      FLAGCXCHECK(getHomoAlgoTime(func, clusterRankSize, vendor, &algoTime));
       postHomoTimeForCluster += algoTime;
     }
     // get the max time for all clusters
@@ -64,26 +64,26 @@ flagcxResult_t FlagCXAlgoTimeEstimator::GetPostHomoAlgoTime(float *time) {
   return flagcxSuccess;
 }
 
-flagcxResult_t FlagCXAlgoTimeEstimator::GetHomoAlgoTime(
+flagcxResult_t flagcxAlgoTimeEstimator::getHomoAlgoTime(
     flagcxC2cHomoFunc &homoFunc, int rankSize, int vendor, float *time) {
   float defaultTime = 0.0;
   *time = defaultTime;
   return flagcxSuccess;
 }
 
-flagcxResult_t FlagCXAlgoTimeEstimator::GetHomoInterAlgoTime(int loop,
+flagcxResult_t flagcxAlgoTimeEstimator::getHomoInterAlgoTime(int loop,
                                                              float *time) {
-  flagcxComm_t comm = planner_.getComm();
-  auto &homoFunc = planner_.getHomoInterFuncs()[loop];
+  flagcxComm_t comm = planner_.comm_;
+  auto &homoFunc = planner_.homoInterFuncList_[loop];
   // getHomoAlgoTime
   float totalHomoInterTime = 0.0;
   // compute the execution time for all clusters
   // use the max time for all clusters
   for (int i = 0; i < comm->nclusters; i++) {
     int vendor = comm->clusterVendorMap[i];
-    int clusterInterRankSize = planner_.getClusterInterRankList()[i].size();
+    int clusterInterRankSize = planner_.clusterInterRankList_[i].size();
     float homoInterTimeForCluster = 0.0;
-    FLAGCXCHECK(GetHomoAlgoTime(homoFunc, clusterInterRankSize, vendor,
+    FLAGCXCHECK(getHomoAlgoTime(homoFunc, clusterInterRankSize, vendor,
                                 &homoInterTimeForCluster));
     totalHomoInterTime = std::max(totalHomoInterTime, homoInterTimeForCluster);
   }
@@ -91,17 +91,17 @@ flagcxResult_t FlagCXAlgoTimeEstimator::GetHomoInterAlgoTime(int loop,
   return flagcxSuccess;
 }
 
-float FlagCXAlgoTimeEstimator::GetRefreshTime() {
+float flagcxAlgoTimeEstimator::getRefreshTime() {
   return 0.0; // return fixed time for now
 }
 
-flagcxResult_t FlagCXAlgoTimeEstimator::GetHeteroAlgoTime(float *time) {
-  flagcxComm_t comm = planner_.getComm();
+flagcxResult_t flagcxAlgoTimeEstimator::getHeteroAlgoTime(float *time) {
+  flagcxComm_t comm = planner_.comm_;
   flagcxHeteroComm_t heteroComm = comm->hetero_comm;
   // filter out hetero funcs for each rank
   std::unordered_map<int, std::vector<flagcxC2cHeteroFunc>> heteroFuncMap;
-  int heteroFuncLoops = planner_.getHeteroAndHomoInterFuncLoops();
-  auto &clusterInterRankList = planner_.getClusterInterRankList();
+  int heteroFuncLoops = planner_.heteroAndHomoInterFuncLoops_;
+  auto &clusterInterRankList = planner_.clusterInterRankList_;
   // get all interRanks
   std::vector<int> interRanks;
   std::unordered_map<uint64_t, std::vector<int>>
@@ -131,10 +131,10 @@ flagcxResult_t FlagCXAlgoTimeEstimator::GetHeteroAlgoTime(float *time) {
     for (int i = 0; i < heteroFuncLoops; i++) {
       INFO(FLAGCX_GRAPH, "COST_MODEL: heteroFunc generation loop %d", i);
       flagcxC2cHeteroFunc &heteroFunc = heteroFuncMap[rank][i];
-      if (planner_.isMultiNic()) {
-        GenerateHeteroFuncForMultiNic(rank, i, heteroFunc);
+      if (planner_.multiNic_) {
+        generateHeteroFuncForMultiNic(rank, i, heteroFunc);
       } else {
-        GenerateHeteroFuncForSingleNic(rank, heteroFunc);
+        generateHeteroFuncForSingleNic(rank, heteroFunc);
       }
     }
   }
@@ -143,18 +143,18 @@ flagcxResult_t FlagCXAlgoTimeEstimator::GetHeteroAlgoTime(float *time) {
     INFO(FLAGCX_GRAPH, "COST_MODEL: heteroFunc loop %d", i);
     // get total send/recv time for each nic in case multiple gpus share a nic
     float timePerLoop = 0.0;
-    timePerLoop += GetRefreshTime();
+    timePerLoop += getRefreshTime();
     float sendRecvTime = 0.0;
     for (auto it = nicRankMap.begin(); it != nicRankMap.end(); it++) {
       uint64_t netGuid = it->first;
       // total p2p time of a nic
-      float p2pTime = GetP2pTimePerNic(netGuid, nicRankMap, heteroFuncMap);
+      float p2pTime = getP2pTimePerNic(netGuid, nicRankMap, heteroFuncMap);
       sendRecvTime = std::max(sendRecvTime, p2pTime);
     }
     timePerLoop += sendRecvTime;
     float homoInterTime = 0.0;
     INFO(FLAGCX_GRAPH, "COST_MODEL: getting homoInter time for loop %d", i);
-    FLAGCXCHECK(GetHomoInterAlgoTime(i, &homoInterTime));
+    FLAGCXCHECK(getHomoInterAlgoTime(i, &homoInterTime));
     timePerLoop += homoInterTime;
     totalTime += timePerLoop;
   }
@@ -164,10 +164,10 @@ flagcxResult_t FlagCXAlgoTimeEstimator::GetHeteroAlgoTime(float *time) {
   return flagcxSuccess;
 }
 
-void FlagCXAlgoTimeEstimator::GenerateHeteroFuncForMultiNic(
+void flagcxAlgoTimeEstimator::generateHeteroFuncForMultiNic(
     int rank, int loop, flagcxC2cHeteroFunc &heteroFunc) {
-  auto &clusterInterRankList = planner_.getClusterInterRankList();
-  auto &interRankBufferInfoManager = planner_.getInterRankBufferInfoManager();
+  auto &clusterInterRankList = planner_.clusterInterRankList_;
+  auto &interRankBufferInfoManager = planner_.interRankBufferInfoManager_;
   for (size_t j = 0; j < clusterInterRankList.size(); j++) {
     for (size_t z = 0; z < clusterInterRankList[j].size(); z++) {
       if (rank == clusterInterRankList[j][z]) {
@@ -185,15 +185,15 @@ void FlagCXAlgoTimeEstimator::GenerateHeteroFuncForMultiNic(
   }
 }
 
-void FlagCXAlgoTimeEstimator::GenerateHeteroFuncForSingleNic(
+void flagcxAlgoTimeEstimator::generateHeteroFuncForSingleNic(
     int rank, flagcxC2cHeteroFunc &heteroFunc) {
-  flagcxComm_t comm = planner_.getComm();
-  auto &clusterInterRankList = planner_.getClusterInterRankList();
+  flagcxComm_t comm = planner_.comm_;
+  auto &clusterInterRankList = planner_.clusterInterRankList_;
   int cid = 0;
   int clusterId = comm->cluster_ids[rank];
   int homoMyRank = comm->globalrank2homorank[rank];
   int homoRanks = comm->cluster_sizes[clusterId];
-  int totalCount = planner_.getTotalCount();
+  int totalCount = planner_.totalCount_;
   for (size_t j = 0; j < clusterInterRankList.size(); ++j) {
     if (clusterId == j) {
       continue;
@@ -221,11 +221,11 @@ void FlagCXAlgoTimeEstimator::GenerateHeteroFuncForSingleNic(
   }
 }
 
-float FlagCXAlgoTimeEstimator::GetP2pTimePerNic(
+float flagcxAlgoTimeEstimator::getP2pTimePerNic(
     uint64_t netGuid,
     std::unordered_map<uint64_t, std::vector<int>> &nicRankMap,
     std::unordered_map<int, std::vector<flagcxC2cHeteroFunc>> &heteroFuncMap) {
-  flagcxComm_t comm = planner_.getComm();
+  flagcxComm_t comm = planner_.comm_;
   flagcxHeteroComm_t heteroComm = comm->hetero_comm;
   auto &rankList = nicRankMap[netGuid];
   float sendTime = 0.0;
@@ -261,10 +261,10 @@ float FlagCXAlgoTimeEstimator::GetP2pTimePerNic(
             heteroComm->interServerTopo->routeMap[netGuid][remoteNet->net.guid]
                 ->interBw; // we haven't recorded all route for all servers yet
         if (p2pOp.isRecv_) {
-          recvTime += GetSendRecvTime(curClusterLat, remoteClusterLat, routeBw,
+          recvTime += getSendRecvTime(curClusterLat, remoteClusterLat, routeBw,
                                       p2pOp.count_, CHUNK_SIZE);
         } else {
-          sendTime += GetSendRecvTime(curClusterLat, remoteClusterLat, routeBw,
+          sendTime += getSendRecvTime(curClusterLat, remoteClusterLat, routeBw,
                                       p2pOp.count_, CHUNK_SIZE);
         }
       }
@@ -273,7 +273,7 @@ float FlagCXAlgoTimeEstimator::GetP2pTimePerNic(
   return std::max(sendTime, recvTime);
 }
 
-float FlagCXAlgoTimeEstimator::GetSendRecvTime(float curClusterLat,
+float flagcxAlgoTimeEstimator::getSendRecvTime(float curClusterLat,
                                                float remoteClusterLat, float bw,
                                                int totalCount,
                                                size_t chunkSize) {
