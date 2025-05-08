@@ -88,6 +88,8 @@ flagcxResult_t flagcxFillClusterVendorInfo(const flagcxVendor *allData,
       comm->clusterVendorMap[cluster] = FLAGCX_VENDOR_ILUVATAR_COREX;
     } else if (vendor == "MLU") {
       comm->clusterVendorMap[cluster] = FLAGCX_VENDOR_MLU;
+    } else if (vendor == "METAX") {
+      comm->clusterVendorMap[cluster] = FLAGCX_VENDOR_METAX;
     }
   }
   return flagcxSuccess;
