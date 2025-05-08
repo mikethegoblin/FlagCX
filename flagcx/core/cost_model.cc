@@ -246,7 +246,7 @@ float flagcxAlgoTimeEstimator::getP2pTimePerNic(
     float curClusterLat =
         flagcxLatMap[vendor][FLAGCX_INTER_LAT_IDX]; // {clusterId: lat}
     for (auto &func : funcList) {
-      for (auto &p2pOp : func.getP2pOps()) {
+      for (auto &p2pOp : func.p2pOps_) {
         int remoteRank = p2pOp.peerRank_;
         int remoteClusterId = comm->cluster_ids[remoteRank];
         int remoteVendor = comm->clusterVendorMap[remoteClusterId];

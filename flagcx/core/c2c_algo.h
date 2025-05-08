@@ -141,14 +141,13 @@ public:
 
 class flagcxC2cHeteroFunc {
 public:
+  friend class flagcxAlgoTimeEstimator;
   flagcxC2cHeteroFunc();
   ~flagcxC2cHeteroFunc();
 
   void addP2pOp(int rank, int peerRank, int offset, int count, int isRecv);
   flagcxResult_t run(void *buff, flagcxDataType_t datatype, flagcxComm_t comm,
                      flagcxStream_t stream);
-
-  inline std::vector<flagcxC2cP2pOp> &getP2pOps() { return p2pOps_; }
 
 private:
   std::vector<flagcxC2cP2pOp> p2pOps_;
