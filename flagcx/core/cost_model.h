@@ -25,7 +25,9 @@ constexpr int FLAGCX_INTER_LAT_IDX = 1;
 class flagcxAlgoTimeEstimator {
 public:
   flagcxAlgoTimeEstimator(flagcxC2cPlanner &planner, flagcxDataType_t dtype)
-      : planner_(planner), datatype(dtype) {}
+      : planner_(planner), datatype(dtype) {
+    initializeHomoTimeMap();
+  }
 
   flagcxResult_t getAlgoTime(float *time);
 
@@ -35,7 +37,7 @@ private:
   flagcxResult_t getPostHomoAlgoTime(float *time);
 
   flagcxResult_t getHomoAlgoTime(flagcxC2cHomoFunc &homoFunc, int rankSize,
-                                 int vendor, float *time);
+                                 flagcxVendorType vendor, float *time);
 
   flagcxResult_t getHeteroAlgoTime(float *time);
 
@@ -57,8 +59,14 @@ private:
   float getSendRecvTime(float curClusterLat, float remoteClusterLat, float bw,
                         int totalCount, size_t chunkSize);
 
+  void initializeHomoTimeMap();
+
   flagcxC2cPlanner &planner_;
   flagcxDataType_t datatype;
+  static std::map<
+      flagcxVendorType,
+      std::map<flagcxCommOp_t, std::map<int, std::map<size_t, float>>>>
+      homoTimeMap;
 };
 
 #endif

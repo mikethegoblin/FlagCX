@@ -1,9 +1,19 @@
 #include "cost_model.h"
 #include "topo.h"
 
+constexpr size_t MB_SIZE = 1024 * 1024;
+constexpr size_t GB_SIZE = 1024 * 1024 * 1024;
 constexpr size_t CHUNK_SIZE = 4ULL * 1024 * 1024;
+
+std::map<flagcxVendorType,
+         std::map<flagcxCommOp_t, std::map<int, std::map<size_t, float>>>>
+    flagcxAlgoTimeEstimator::homoTimeMap;
+// 0: Nvidia, 1: Iluvatar, 2: MLU, 3: Metax
 const float flagcxLatMap[FLAGCX_VENDOR_NUM][2] = {
-    {0.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}};
+    {0.0, 14.0},
+    {0.0, 14.0},
+    {0.0, 0.0},
+    {0.0, 0.0}}; // assume that latency have a negligible impact on algo time
 
 flagcxResult_t flagcxAlgoTimeEstimator::getAlgoTime(float *time) {
   const char *enableTopoDetect = flagcxGetEnv("FLAGCX_ENABLE_TOPO_DETECT");
@@ -32,7 +42,7 @@ flagcxResult_t flagcxAlgoTimeEstimator::getPreHomoAlgoTime(float *time) {
   // compute the execution time for all clusters
   // use the max time for all clusters
   for (int i = 0; i < comm->nclusters; i++) {
-    int vendor = comm->clusterVendorMap[i];
+    flagcxVendorType vendor = comm->clusterVendorMap[i];
     int clusterRankSize =
         comm->cluster_sizes[i]; // get how many ranks are in this cluster
     float preHomoTimeForCluster = 0.0;
@@ -55,7 +65,7 @@ flagcxResult_t flagcxAlgoTimeEstimator::getPostHomoAlgoTime(float *time) {
   // compute the execution time for all clusters
   // use the max time for all clusters
   for (int i = 0; i < comm->nclusters; i++) {
-    int vendor = comm->clusterVendorMap[i];
+    flagcxVendorType vendor = comm->clusterVendorMap[i];
     int clusterRankSize =
         comm->cluster_sizes[i]; // get how many ranks are in this cluster
     float postHomoTimeForCluster = 0.0;
@@ -71,9 +81,17 @@ flagcxResult_t flagcxAlgoTimeEstimator::getPostHomoAlgoTime(float *time) {
   return flagcxSuccess;
 }
 
-flagcxResult_t flagcxAlgoTimeEstimator::getHomoAlgoTime(
-    flagcxC2cHomoFunc &homoFunc, int rankSize, int vendor, float *time) {
-  float defaultTime = 0.0;
+flagcxResult_t
+flagcxAlgoTimeEstimator::getHomoAlgoTime(flagcxC2cHomoFunc &homoFunc,
+                                         int rankSize, flagcxVendorType vendor,
+                                         float *time) {
+  size_t totalSize = homoFunc.count_ * getFlagcxDataTypeSize(datatype);
+  INFO(FLAGCX_GRAPH,
+       "COST_MODEL: getHomoAlgoTime: vendor = %d, commOp = %d, rankSize = %d, "
+       "totalSize = %ld",
+       vendor, homoFunc.commOp_, rankSize, totalSize);
+  float defaultTime =
+      homoTimeMap[vendor][homoFunc.commOp_][rankSize][totalSize];
   *time = defaultTime;
   return flagcxSuccess;
 }
@@ -87,7 +105,7 @@ flagcxResult_t flagcxAlgoTimeEstimator::getHomoInterAlgoTime(int loop,
   // compute the execution time for all clusters
   // use the max time for all clusters
   for (int i = 0; i < comm->nclusters; i++) {
-    int vendor = comm->clusterVendorMap[i];
+    flagcxVendorType vendor = comm->clusterVendorMap[i];
     int clusterInterRankSize = planner_.clusterInterRankList_[i].size();
     float homoInterTimeForCluster = 0.0;
     FLAGCXCHECK(getHomoAlgoTime(homoFunc, clusterInterRankSize, vendor,
@@ -298,4 +316,349 @@ float flagcxAlgoTimeEstimator::getSendRecvTime(float curClusterLat,
     sizeSent += sendSize;
   }
   return time;
+}
+
+void flagcxAlgoTimeEstimator::initializeHomoTimeMap() {
+  // initialize
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduce][2][16 * MB_SIZE] =
+      129.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduce][2][32 * MB_SIZE] =
+      229.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduce][2][64 * MB_SIZE] =
+      418.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduce][2][128 * MB_SIZE] =
+      798.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduce][2][256 * MB_SIZE] =
+      1554.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduce][2][512 * MB_SIZE] =
+      3073.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduce][2][1 * GB_SIZE] =
+      6109.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduce][2][2 * GB_SIZE] =
+      12177.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduce][2][4 * GB_SIZE] =
+      24363.0;
+
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduce][4][16 * MB_SIZE] =
+      142.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduce][4][32 * MB_SIZE] =
+      255.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduce][4][64 * MB_SIZE] =
+      466.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduce][4][128 * MB_SIZE] =
+      893.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduce][4][256 * MB_SIZE] =
+      1750.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduce][4][512 * MB_SIZE] =
+      3461.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduce][4][1 * GB_SIZE] =
+      6882.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduce][4][2 * GB_SIZE] =
+      13725.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduce][4][4 * GB_SIZE] =
+      27423.0;
+
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduce][8][16 * MB_SIZE] =
+      146.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduce][8][32 * MB_SIZE] =
+      254.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduce][8][64 * MB_SIZE] =
+      469.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduce][8][128 * MB_SIZE] =
+      897.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduce][8][256 * MB_SIZE] =
+      1753.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduce][8][512 * MB_SIZE] =
+      3466.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduce][8][1 * GB_SIZE] =
+      6882.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduce][8][2 * GB_SIZE] =
+      13722.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduce][8][4 * GB_SIZE] =
+      27396.0;
+
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpAllReduce][2][16 * MB_SIZE] =
+      180.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpAllReduce][2][32 * MB_SIZE] =
+      317.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpAllReduce][2][64 * MB_SIZE] =
+      580.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpAllReduce][2][128 * MB_SIZE] =
+      1100.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpAllReduce][2][256 * MB_SIZE] =
+      2055.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpAllReduce][2][512 * MB_SIZE] =
+      3983.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpAllReduce][2][1 * GB_SIZE] =
+      7671.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpAllReduce][2][2 * GB_SIZE] =
+      15012.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpAllReduce][2][4 * GB_SIZE] =
+      29754.0;
+
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpAllReduce][4][16 * MB_SIZE] =
+      235.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpAllReduce][4][32 * MB_SIZE] =
+      409.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpAllReduce][4][64 * MB_SIZE] =
+      722.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpAllReduce][4][128 * MB_SIZE] =
+      1421.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpAllReduce][4][256 * MB_SIZE] =
+      2773.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpAllReduce][4][512 * MB_SIZE] =
+      5399.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpAllReduce][4][1 * GB_SIZE] =
+      10554.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpAllReduce][4][2 * GB_SIZE] =
+      20878.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpAllReduce][4][4 * GB_SIZE] =
+      41392.0;
+
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpAllReduce][8][16 * MB_SIZE] =
+      293.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpAllReduce][8][32 * MB_SIZE] =
+      465.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpAllReduce][8][64 * MB_SIZE] =
+      845.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpAllReduce][8][128 * MB_SIZE] =
+      1597.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpAllReduce][8][256 * MB_SIZE] =
+      3118.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpAllReduce][8][512 * MB_SIZE] =
+      6136.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpAllReduce][8][1 * GB_SIZE] =
+      12123.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpAllReduce][8][2 * GB_SIZE] =
+      24124.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpAllReduce][8][4 * GB_SIZE] =
+      48340.0;
+
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduceScatter][2]
+             [16 * MB_SIZE] = 116.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduceScatter][2]
+             [32 * MB_SIZE] = 191.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduceScatter][2]
+             [64 * MB_SIZE] = 340.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduceScatter][2]
+             [128 * MB_SIZE] = 650.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduceScatter][2]
+             [256 * MB_SIZE] = 1250.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduceScatter][2]
+             [512 * MB_SIZE] = 2315.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduceScatter][2][1 * GB_SIZE] =
+      4469.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduceScatter][2][2 * GB_SIZE] =
+      8698.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduceScatter][2][4 * GB_SIZE] =
+      17042.0;
+
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduceScatter][4]
+             [16 * MB_SIZE] = 138.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduceScatter][4]
+             [32 * MB_SIZE] = 234.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduceScatter][4]
+             [64 * MB_SIZE] = 424.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduceScatter][4]
+             [128 * MB_SIZE] = 791.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduceScatter][4]
+             [256 * MB_SIZE] = 1484.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduceScatter][4]
+             [512 * MB_SIZE] = 2885.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduceScatter][4][1 * GB_SIZE] =
+      5595.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduceScatter][4][2 * GB_SIZE] =
+      10894.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduceScatter][4][4 * GB_SIZE] =
+      21406.0;
+
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduceScatter][8]
+             [16 * MB_SIZE] = 164.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduceScatter][8]
+             [32 * MB_SIZE] = 258.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduceScatter][8]
+             [64 * MB_SIZE] = 457.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduceScatter][8]
+             [128 * MB_SIZE] = 865.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduceScatter][8]
+             [256 * MB_SIZE] = 1624.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduceScatter][8]
+             [512 * MB_SIZE] = 3181.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduceScatter][8][1 * GB_SIZE] =
+      6253.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduceScatter][8][2 * GB_SIZE] =
+      12331.0;
+  homoTimeMap[FLAGCX_VENDOR_NVIDIA][flagcxCommOpReduceScatter][8][4 * GB_SIZE] =
+      24391.0;
+
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduce][2]
+             [16 * MB_SIZE] = 450.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduce][2]
+             [32 * MB_SIZE] = 888.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduce][2]
+             [64 * MB_SIZE] = 1763.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduce][2]
+             [128 * MB_SIZE] = 3512.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduce][2]
+             [256 * MB_SIZE] = 7011.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduce][2]
+             [512 * MB_SIZE] = 14008.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduce][2]
+             [1 * GB_SIZE] = 28001.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduce][2]
+             [2 * GB_SIZE] = 55991.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduce][2]
+             [4 * GB_SIZE] = 111970.0;
+
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduce][4]
+             [16 * MB_SIZE] = 755.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduce][4]
+             [32 * MB_SIZE] = 1492.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduce][4]
+             [64 * MB_SIZE] = 2964.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduce][4]
+             [128 * MB_SIZE] = 5909.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduce][4]
+             [256 * MB_SIZE] = 11813.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduce][4]
+             [512 * MB_SIZE] = 23617.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduce][4]
+             [1 * GB_SIZE] = 47228.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduce][4]
+             [2 * GB_SIZE] = 94358.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduce][4]
+             [4 * GB_SIZE] = 188604.0;
+
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduce][8]
+             [16 * MB_SIZE] = 2038.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduce][8]
+             [32 * MB_SIZE] = 4033.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduce][8]
+             [64 * MB_SIZE] = 7962.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduce][8]
+             [128 * MB_SIZE] = 15766.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduce][8]
+             [256 * MB_SIZE] = 31313.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduce][8]
+             [512 * MB_SIZE] = 62342.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduce][8]
+             [1 * GB_SIZE] = 124147.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduce][8]
+             [2 * GB_SIZE] = 248075.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduce][8]
+             [4 * GB_SIZE] = 495911.0;
+
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpAllReduce][2]
+             [16 * MB_SIZE] = 951.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpAllReduce][2]
+             [32 * MB_SIZE] = 1826.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpAllReduce][2]
+             [64 * MB_SIZE] = 3576.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpAllReduce][2]
+             [128 * MB_SIZE] = 7074.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpAllReduce][2]
+             [256 * MB_SIZE] = 14069.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpAllReduce][2]
+             [512 * MB_SIZE] = 28062.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpAllReduce][2]
+             [1 * GB_SIZE] = 56048.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpAllReduce][2]
+             [2 * GB_SIZE] = 112015.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpAllReduce][2]
+             [4 * GB_SIZE] = 223956.0;
+
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpAllReduce][4]
+             [16 * MB_SIZE] = 1401.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpAllReduce][4]
+             [32 * MB_SIZE] = 2725.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpAllReduce][4]
+             [64 * MB_SIZE] = 5371.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpAllReduce][4]
+             [128 * MB_SIZE] = 10668.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpAllReduce][4]
+             [256 * MB_SIZE] = 21254.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpAllReduce][4]
+             [512 * MB_SIZE] = 42442.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpAllReduce][4]
+             [1 * GB_SIZE] = 84757.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpAllReduce][4]
+             [2 * GB_SIZE] = 169440.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpAllReduce][4]
+             [4 * GB_SIZE] = 338744.0;
+
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpAllReduce][8]
+             [16 * MB_SIZE] = 3834.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpAllReduce][8]
+             [32 * MB_SIZE] = 7620.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpAllReduce][8]
+             [64 * MB_SIZE] = 15189.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpAllReduce][8]
+             [128 * MB_SIZE] = 30239.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpAllReduce][8]
+             [256 * MB_SIZE] = 60229.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpAllReduce][8]
+             [512 * MB_SIZE] = 120152.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpAllReduce][8]
+             [1 * GB_SIZE] = 238922.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpAllReduce][8]
+             [2 * GB_SIZE] = 476359.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpAllReduce][8]
+             [4 * GB_SIZE] = 954225.0;
+
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduceScatter][2]
+             [16 * MB_SIZE] = 516.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduceScatter][2]
+             [32 * MB_SIZE] = 964.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduceScatter][2]
+             [64 * MB_SIZE] = 1854.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduceScatter][2]
+             [128 * MB_SIZE] = 3624.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduceScatter][2]
+             [256 * MB_SIZE] = 7167.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduceScatter][2]
+             [512 * MB_SIZE] = 14245.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduceScatter][2]
+             [1 * GB_SIZE] = 28416.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduceScatter][2]
+             [2 * GB_SIZE] = 56750.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduceScatter][2]
+             [4 * GB_SIZE] = 113402.0;
+
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduceScatter][4]
+             [16 * MB_SIZE] = 744.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduceScatter][4]
+             [32 * MB_SIZE] = 1409.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduceScatter][4]
+             [64 * MB_SIZE] = 2732.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduceScatter][4]
+             [128 * MB_SIZE] = 5376.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduceScatter][4]
+             [256 * MB_SIZE] = 10666.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduceScatter][4]
+             [512 * MB_SIZE] = 21246.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduceScatter][4]
+             [1 * GB_SIZE] = 42415.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduceScatter][4]
+             [2 * GB_SIZE] = 84752.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduceScatter][4]
+             [4 * GB_SIZE] = 169423.0;
+
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduceScatter][8]
+             [16 * MB_SIZE] = 1920.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduceScatter][8]
+             [32 * MB_SIZE] = 3805.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduceScatter][8]
+             [64 * MB_SIZE] = 7589.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduceScatter][8]
+             [128 * MB_SIZE] = 15152.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduceScatter][8]
+             [256 * MB_SIZE] = 30080.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduceScatter][8]
+             [512 * MB_SIZE] = 59751.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduceScatter][8]
+             [1 * GB_SIZE] = 119258.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduceScatter][8]
+             [2 * GB_SIZE] = 238926.0;
+  homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduceScatter][8]
+             [4 * GB_SIZE] = 476313.0;
 }
