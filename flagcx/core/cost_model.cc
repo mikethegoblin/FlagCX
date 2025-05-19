@@ -13,7 +13,7 @@ const float flagcxLatMap[FLAGCX_VENDOR_NUM][2] = {
     {0.0, 14.0},
     {0.0, 14.0},
     {0.0, 0.0},
-    {0.0, 0.0}}; // assume that latency have a negligible impact on algo time
+    {0.0, 14.0}}; // assume that latency have a negligible impact on algo time
 
 flagcxResult_t flagcxAlgoTimeEstimator::getAlgoTime(float *time) {
   const char *enableTopoDetect = flagcxGetEnv("FLAGCX_ENABLE_TOPO_DETECT");
