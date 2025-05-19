@@ -29,6 +29,9 @@ flagcxResult_t flagcxAlgoTimeEstimator::getAlgoTime(float *time) {
     FLAGCXCHECK(getHeteroAlgoTime(&heteroTime));
     INFO(FLAGCX_GRAPH, "COST_MODEL: getting time for posthomo funcs");
     FLAGCXCHECK(getPostHomoAlgoTime(&postHomoTime));
+    INFO(FLAGCX_GRAPH,
+         "COST_MODEL: preHomoTime = %f, heteroTime = %f, postHomoTime = %f",
+         preHomoTime, heteroTime, postHomoTime);
     *time = preHomoTime + heteroTime + postHomoTime;
   }
   return flagcxSuccess;
@@ -85,7 +88,11 @@ flagcxResult_t
 flagcxAlgoTimeEstimator::getHomoAlgoTime(flagcxC2cHomoFunc &homoFunc,
                                          int rankSize, flagcxVendorType vendor,
                                          float *time) {
+  flagcxComm_t comm = planner_.comm_;
   size_t totalSize = homoFunc.count_ * getFlagcxDataTypeSize(datatype);
+  if (!homoFunc.isHomoInterComm_) {
+    rankSize = comm->homo_ranks;
+  }
   INFO(FLAGCX_GRAPH,
        "COST_MODEL: getHomoAlgoTime: vendor = %d, commOp = %d, rankSize = %d, "
        "totalSize = %ld",
@@ -112,7 +119,7 @@ flagcxResult_t flagcxAlgoTimeEstimator::getHomoInterAlgoTime(int loop,
                                 &homoInterTimeForCluster));
     totalHomoInterTime = std::max(totalHomoInterTime, homoInterTimeForCluster);
   }
-  *time = 0.0;
+  *time = totalHomoInterTime;
   return flagcxSuccess;
 }
 
@@ -180,6 +187,7 @@ flagcxResult_t flagcxAlgoTimeEstimator::getHeteroAlgoTime(float *time) {
     float homoInterTime = 0.0;
     INFO(FLAGCX_GRAPH, "COST_MODEL: getting homoInter time for loop %d", i);
     FLAGCXCHECK(getHomoInterAlgoTime(i, &homoInterTime));
+    INFO(FLAGCX_COLL, "COST_MODEL: homoInterTime = %f", homoInterTime);
     timePerLoop += homoInterTime;
     totalTime += timePerLoop;
   }
@@ -661,4 +669,167 @@ void flagcxAlgoTimeEstimator::initializeHomoTimeMap() {
              [2 * GB_SIZE] = 238926.0;
   homoTimeMap[FLAGCX_VENDOR_ILUVATAR_COREX][flagcxCommOpReduceScatter][8]
              [4 * GB_SIZE] = 476313.0;
+
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduce][2][16 * MB_SIZE] = 476.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduce][2][32 * MB_SIZE] = 905.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduce][2][64 * MB_SIZE] =
+      1785.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduce][2][128 * MB_SIZE] =
+      2750.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduce][2][256 * MB_SIZE] =
+      5458.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduce][2][512 * MB_SIZE] =
+      10969.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduce][2][1 * GB_SIZE] =
+      22133.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduce][2][2 * GB_SIZE] =
+      44718.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduce][2][4 * GB_SIZE] =
+      89973.0;
+
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduce][4][16 * MB_SIZE] = 343.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduce][4][32 * MB_SIZE] = 693.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduce][4][64 * MB_SIZE] =
+      1048.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduce][4][128 * MB_SIZE] =
+      1624.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduce][4][256 * MB_SIZE] =
+      2975.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduce][4][512 * MB_SIZE] =
+      5683.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduce][4][1 * GB_SIZE] =
+      11075.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduce][4][2 * GB_SIZE] =
+      21683.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduce][4][4 * GB_SIZE] =
+      42680.0;
+
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduce][8][16 * MB_SIZE] = 504.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduce][8][32 * MB_SIZE] = 848.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduce][8][64 * MB_SIZE] = 996.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduce][8][128 * MB_SIZE] =
+      1758.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduce][8][256 * MB_SIZE] =
+      2588.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduce][8][512 * MB_SIZE] =
+      4282.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduce][8][1 * GB_SIZE] = 7706.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduce][8][2 * GB_SIZE] =
+      14384.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduce][8][4 * GB_SIZE] =
+      27515.0;
+
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpAllReduce][2][16 * MB_SIZE] =
+      503.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpAllReduce][2][32 * MB_SIZE] =
+      939.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpAllReduce][2][64 * MB_SIZE] =
+      1837.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpAllReduce][2][128 * MB_SIZE] =
+      2872.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpAllReduce][2][256 * MB_SIZE] =
+      5692.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpAllReduce][2][512 * MB_SIZE] =
+      11369.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpAllReduce][2][1 * GB_SIZE] =
+      22684.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpAllReduce][2][2 * GB_SIZE] =
+      45345.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpAllReduce][2][4 * GB_SIZE] =
+      90608.0;
+
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpAllReduce][4][16 * MB_SIZE] =
+      233.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpAllReduce][4][32 * MB_SIZE] =
+      441.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpAllReduce][4][64 * MB_SIZE] =
+      790.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpAllReduce][4][128 * MB_SIZE] =
+      1490.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpAllReduce][4][256 * MB_SIZE] =
+      2926.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpAllReduce][4][512 * MB_SIZE] =
+      5796.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpAllReduce][4][1 * GB_SIZE] =
+      11510.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpAllReduce][4][2 * GB_SIZE] =
+      22977.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpAllReduce][4][4 * GB_SIZE] =
+      45930.0;
+
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpAllReduce][8][16 * MB_SIZE] =
+      170.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpAllReduce][8][32 * MB_SIZE] =
+      281.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpAllReduce][8][64 * MB_SIZE] =
+      493.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpAllReduce][8][128 * MB_SIZE] =
+      975.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpAllReduce][8][256 * MB_SIZE] =
+      1695.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpAllReduce][8][512 * MB_SIZE] =
+      3307.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpAllReduce][8][1 * GB_SIZE] =
+      6591.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpAllReduce][8][2 * GB_SIZE] =
+      13045.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpAllReduce][8][4 * GB_SIZE] =
+      25989.0;
+
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduceScatter][2][16 * MB_SIZE] =
+      279.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduceScatter][2][32 * MB_SIZE] =
+      523.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduceScatter][2][64 * MB_SIZE] =
+      980.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduceScatter][2]
+             [128 * MB_SIZE] = 1581.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduceScatter][2]
+             [256 * MB_SIZE] = 3057.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduceScatter][2]
+             [512 * MB_SIZE] = 6109.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduceScatter][2][1 * GB_SIZE] =
+      12174.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduceScatter][2][2 * GB_SIZE] =
+      24294.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduceScatter][2][4 * GB_SIZE] =
+      48504.0;
+
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduceScatter][4][16 * MB_SIZE] =
+      260.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduceScatter][4][32 * MB_SIZE] =
+      350.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduceScatter][4][64 * MB_SIZE] =
+      439.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduceScatter][4]
+             [128 * MB_SIZE] = 773.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduceScatter][4]
+             [256 * MB_SIZE] = 1493.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduceScatter][4]
+             [512 * MB_SIZE] = 2969.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduceScatter][4][1 * GB_SIZE] =
+      5838.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduceScatter][4][2 * GB_SIZE] =
+      11650.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduceScatter][4][4 * GB_SIZE] =
+      23253.0;
+
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduceScatter][8][16 * MB_SIZE] =
+      136.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduceScatter][8][32 * MB_SIZE] =
+      217.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduceScatter][8][64 * MB_SIZE] =
+      269.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduceScatter][8]
+             [128 * MB_SIZE] = 593.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduceScatter][8]
+             [256 * MB_SIZE] = 883.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduceScatter][8]
+             [512 * MB_SIZE] = 1770.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduceScatter][8][1 * GB_SIZE] =
+      3395.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduceScatter][8][2 * GB_SIZE] =
+      6710.0;
+  homoTimeMap[FLAGCX_VENDOR_METAX][flagcxCommOpReduceScatter][8][4 * GB_SIZE] =
+      13325.0;
 }
