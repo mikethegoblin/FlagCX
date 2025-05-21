@@ -393,6 +393,8 @@ flagcxResult_t flagcxCommInitRank(flagcxComm_t *comm, int nranks,
       nicDistanceData[rank].distance = rank % 2 + 1;
       nicDistanceData[rank].netGuid = rank; // give a dummy value
     }
+    INFO(FLAGCX_GRAPH, "rank = %d, netDev = %d", rank,
+         (*comm)->hetero_comm->netDev);
     FLAGCXCHECK(bootstrapAllGather(state, (void *)nicDistanceData,
                                    sizeof(flagcxNicDistance)));
     FLAGCXCHECK(bootstrapBarrier(state, rank, nranks, 0));
@@ -1114,9 +1116,10 @@ flagcxResult_t flagcxAllReduce(const void *sendbuff, void *recvbuff,
             flagcxC2cPlanner(count, count, -1, comm, flagcxCommOpAllReduce, op);
         planCache.put(hashValue, planner);
         // TODO: add estimator part
-        // flagcxAlgoTimeEstimator estimator(planner, datatype);
-        // float time = 0.0;
-        // FLAGCXCHECK(estimator.getAlgoTime(&time));
+        flagcxAlgoTimeEstimator estimator(datatype, planner);
+        float time = 0.0;
+        FLAGCXCHECK(estimator.getAlgoTime(&time));
+        INFO(FLAGCX_COLL, "Cost Model estimation for AllReduce: %f us", time);
       } else {
         INFO(FLAGCX_COLL,
              "Found available plan with communication pattern "

@@ -213,6 +213,15 @@ flagcxResult_t flagcxC2cP2pOp::run(void *buff, flagcxDataType_t datatype,
   }
 }
 
+flagcxResult_t flagcxC2cP2pOp::getP2pOpInfo(flagcxC2cP2POpInfo *p2pOpInfo) {
+  p2pOpInfo->rank = rank_;
+  p2pOpInfo->peerRank = peerRank_;
+  p2pOpInfo->offset = offset_;
+  p2pOpInfo->count = count_;
+  p2pOpInfo->isRecv = isRecv_;
+  return flagcxSuccess;
+}
+
 flagcxC2cHomoFunc::flagcxC2cHomoFunc(int rootRank, int sendOffset,
                                      int recvOffset, int count,
                                      int isHomoInterComm, flagcxCommOp_t commOp)
@@ -220,6 +229,17 @@ flagcxC2cHomoFunc::flagcxC2cHomoFunc(int rootRank, int sendOffset,
       count_(count), isHomoInterComm_(isHomoInterComm), commOp_(commOp) {}
 
 flagcxC2cHomoFunc::~flagcxC2cHomoFunc() {}
+
+flagcxResult_t
+flagcxC2cHomoFunc::getHomoFuncInfo(flagcxC2cHomoFuncInfo *homoFuncInfo) {
+  homoFuncInfo->rootRank = rootRank_;
+  homoFuncInfo->sendOffset = sendOffset_;
+  homoFuncInfo->recvOffset = recvOffset_;
+  homoFuncInfo->count = count_;
+  homoFuncInfo->isHomoInterComm = isHomoInterComm_;
+  homoFuncInfo->commOp = commOp_;
+  return flagcxSuccess;
+}
 
 flagcxResult_t flagcxC2cHomoFunc::run(const void *sendbuff, void *recvbuff,
                                       flagcxDataType_t datatype,
@@ -333,6 +353,14 @@ flagcxResult_t flagcxC2cHomoFunc::run(const void *sendbuff, void *recvbuff,
 
 flagcxC2cHeteroFunc::flagcxC2cHeteroFunc() {}
 flagcxC2cHeteroFunc::~flagcxC2cHeteroFunc() {}
+
+flagcxResult_t flagcxC2cHeteroFunc::getHeteroFuncInfo(
+    flagcxC2cHeteroFuncInfo *heteroFuncInfo) {
+  for (int i = 0; i < p2pOps_.size(); i++) {
+    FLAGCXCHECK(p2pOps_[i].getP2pOpInfo(heteroFuncInfo->p2pOps + i));
+  }
+  return flagcxSuccess;
+}
 
 void flagcxC2cHeteroFunc::addP2pOp(int rank, int peerRank, int offset,
                                    int count, int isRecv) {
@@ -572,6 +600,44 @@ flagcxCommOp_t flagcxC2cPlanner::getC2cHomoCommOp(int homoType, int mode) {
     default:
       return flagcxCommNoOp;
   }
+}
+flagcxResult_t
+flagcxC2cPlanner::getPlannerInfo(flagcxC2cPlannerInfo *plannerInfoData) {
+  flagcxC2cPlannerInfo *plannerInfo = plannerInfoData + rank_;
+  plannerInfo->clusterId = clusterId_;
+  plannerInfo->homoMyRank = homoMyRank_;
+  plannerInfo->homoRootRank = homoRootRank_;
+  plannerInfo->homoRanks = homoRanks_;
+  plannerInfo->homoInterMyRank = homoInterMyRank_;
+  plannerInfo->homoInterRootRank = homoInterRootRank_;
+  plannerInfo->homoInterRanks = homoInterRanks_;
+  plannerInfo->totalCount = totalCount_;
+  plannerInfo->isRootCluster = isRootCluster_;
+  plannerInfo->clusterCount = clusterCount_;
+  plannerInfo->clusterOffset = clusterOffset_;
+  plannerInfo->multiNic = multiNic_;
+  plannerInfo->eachNicPerRank = eachNicPerRank_;
+  plannerInfo->rank = rank_;
+  plannerInfo->preHomoFuncLoops = preHomoFuncLoops_;
+  plannerInfo->heteroAndHomoInterFuncLoops = heteroAndHomoInterFuncLoops_;
+  plannerInfo->postHomoFuncLoops = postHomoFuncLoops_;
+  for (int i = 0; i < preHomoFuncList_.size(); i++) {
+    FLAGCXCHECK(
+        preHomoFuncList_[i].getHomoFuncInfo(plannerInfo->preHomoFuncList + i));
+  }
+  for (int i = 0; i < heteroFuncList_.size(); i++) {
+    FLAGCXCHECK(
+        heteroFuncList_[i].getHeteroFuncInfo(plannerInfo->heteroFuncList + i));
+  }
+  for (int i = 0; i < homoInterFuncList_.size(); i++) {
+    FLAGCXCHECK(homoInterFuncList_[i].getHomoFuncInfo(
+        plannerInfo->homoInterFuncList + i));
+  }
+  for (int i = 0; i < postHomoFuncList_.size(); i++) {
+    FLAGCXCHECK(postHomoFuncList_[i].getHomoFuncInfo(
+        plannerInfo->postHomoFuncList + i));
+  }
+  return flagcxSuccess;
 }
 
 flagcxResult_t flagcxC2cPlanner::refresh(int isSendRecv) {
@@ -1149,6 +1215,7 @@ flagcxResult_t flagcxC2cPlanner::execute(const void *sendbuff, void *recvbuff,
                                          flagcxStream_t stream,
                                          size_t *sendCounts, size_t *sDispls,
                                          size_t *recvCounts, size_t *rDispls) {
+  using clock = std::chrono::steady_clock;
   // redOp validation
   if (redOp_ != flagcxRedNoOp) {
     if (redOp_ != flagcxSum && redOp_ != flagcxMax && redOp_ != flagcxMin) {
@@ -1199,11 +1266,20 @@ flagcxResult_t flagcxC2cPlanner::execute(const void *sendbuff, void *recvbuff,
           : recvTmpBuff;
 
   // execute preHomoFuncs
+  auto preHomoStart = std::chrono::duration_cast<std::chrono::microseconds>(
+                          clock::now().time_since_epoch())
+                          .count();
   for (int i = 0; i < preHomoFuncLoops_; ++i) {
     preHomoFuncList_[i].run(sendbuff, recvTmpBuff, datatype, redOp_,
                             comm_->globalrank2homorank[root], comm_, stream,
                             sendCounts_, sDispls_, recvCounts_, rDispls_);
   }
+  deviceAdaptor->streamSynchronize(stream);
+  auto preHomoEnd = std::chrono::duration_cast<std::chrono::microseconds>(
+                        clock::now().time_since_epoch())
+                        .count();
+  double preHomoTime = preHomoEnd - preHomoStart;
+  INFO(FLAGCX_COLL, "preHomoTime for rank %d: %lf us", rank_, preHomoTime);
 
   for (int i = 0; i < heteroAndHomoInterFuncLoops_; ++i) {
     // execute refreshFunc
@@ -1213,19 +1289,41 @@ flagcxResult_t flagcxC2cPlanner::execute(const void *sendbuff, void *recvbuff,
     // deviceAdaptor->streamSynchronize(stream);
 
     // execute heteroFuncs
+    auto heteroStart = std::chrono::duration_cast<std::chrono::microseconds>(
+                           clock::now().time_since_epoch())
+                           .count();
     heteroFuncList_[i].run(sendTmpBuff, recvTmpBuff, datatype, comm_, stream);
 
     // TODO: use stream wait rather than stream sync to avoid cpu blocking
     deviceAdaptor->streamSynchronize(stream);
+    auto heteroEnd = std::chrono::duration_cast<std::chrono::microseconds>(
+                         clock::now().time_since_epoch())
+                         .count();
+    double heteroTime = heteroEnd - heteroStart;
+    INFO(FLAGCX_COLL, "heteroTime for rank %d at loop %d: %lf us", rank_, i,
+         heteroTime);
 
     // execute homoInterFuncs
+    auto homoInterStart = std::chrono::duration_cast<std::chrono::microseconds>(
+                              clock::now().time_since_epoch())
+                              .count();
     homoInterFuncList_[i].run(recvTmpBuff, recvTmpBuff, datatype, redOp_,
                               comm_->globalrank2homorank[root], comm_, stream);
+    auto homoInterEnd = std::chrono::duration_cast<std::chrono::microseconds>(
+                            clock::now().time_since_epoch())
+                            .count();
+    double homoInterTime = homoInterEnd - homoInterStart;
+    INFO(FLAGCX_COLL, "homoInterTime for rank %d at loop %d: %lf us", rank_, i,
+         homoInterTime);
+    deviceAdaptor->streamSynchronize(stream);
   }
 
   // execute postHomoFuns
   // we assume that there may be multiple post homo-funcs,
   // but now postHomoFuncLoops_ can only be set to 0 and 1
+  auto postHomoStart = std::chrono::duration_cast<std::chrono::microseconds>(
+                           clock::now().time_since_epoch())
+                           .count();
   for (int i = 0; i < postHomoFuncLoops_; ++i) {
     // execute refresh func
     refreshFunc_.run(recvTmpBuff, datatype, stream);
@@ -1234,6 +1332,12 @@ flagcxResult_t flagcxC2cPlanner::execute(const void *sendbuff, void *recvbuff,
     postHomoFuncList_[i].run(recvTmpBuff, recvbuff, datatype, redOp_,
                              comm_->globalrank2homorank[root], comm_, stream);
   }
+  deviceAdaptor->streamSynchronize(stream);
+  auto postHomoEnd = std::chrono::duration_cast<std::chrono::microseconds>(
+                         clock::now().time_since_epoch())
+                         .count();
+  double postHomoTime = postHomoEnd - postHomoStart;
+  INFO(FLAGCX_COLL, "postHomoTime for rank %d: %lf us", rank_, postHomoTime);
 
   // free scratch buffer if needed
   if (scratchBuffer_ != nullptr) {
