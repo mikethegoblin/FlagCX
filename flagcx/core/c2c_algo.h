@@ -298,7 +298,8 @@ private:
   std::vector<flagcxC2cHomoFunc> homoInterFuncList_;
   std::vector<flagcxC2cHomoFunc> postHomoFuncList_;
   void *scratchBuffer_; // used for intermediate processing
-  int debugMode_{0};    // 0: no debug, 1: debug mode
+#ifdef FLAGCX_ALGO_DEBUG
+  int debugMode_{0}; // 0: no debug, 1: debug mode
   uint64_t preHomoStartTime_{0};
   uint64_t preHomoEndTime_{0};
   uint64_t heteroStartTime_{0};
@@ -307,6 +308,7 @@ private:
   uint64_t homoInterEndTime_{0};
   uint64_t postHomoStartTime_{0};
   uint64_t postHomoEndTime_{0};
+#endif
 };
 
 #endif // end include guard

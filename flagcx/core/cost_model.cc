@@ -10,7 +10,7 @@ std::map<flagcxVendorType,
     flagcxAlgoTimeEstimator::homoTimeMap;
 // 0: Nvidia, 1: Iluvatar, 2: MLU, 3: Metax
 const float flagcxLatMap[FLAGCX_VENDOR_NUM][2] = {
-    {0.0, 14.0},
+    {0.0, 0.0},
     {0.0, 0.0},
     {0.0, 0.0},
     {0.0, 0.0}}; // assume that latency have a negligible impact on algo time
@@ -114,6 +114,9 @@ flagcxAlgoTimeEstimator::getHomoAlgoTime(flagcxC2cHomoFuncInfo &homoFunc,
   size_t totalSize = homoFunc.count * getFlagcxDataTypeSize(datatype_);
   if (!homoFunc.isHomoInterComm) {
     rankSize = comm_->cluster_sizes[comm_->cluster_ids[rank]];
+  }
+  if (homoFunc.commOp == flagcxCommOpReduceScatter) {
+    totalSize = homoFunc.count * rankSize * getFlagcxDataTypeSize(datatype_);
   }
   INFO(FLAGCX_GRAPH,
        "COST_MODEL: getHomoAlgoTime: vendor = %d, commOp = %d, rankSize = %d, "

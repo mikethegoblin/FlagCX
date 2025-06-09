@@ -621,10 +621,6 @@ flagcxC2cPlanner::flagcxC2cPlanner(int sendCount, int recvCount, int rootRank,
 
   // init inter-rank buffer info manager
   interRankBufferInfoManager_ = flagcxInterRankBufferInfoManager(totalCount_);
-  const char *enableDebug = flagcxGetEnv("FLAGCX_ENABLE_PLANNER_DEBUG");
-  if (enableDebug && strcmp(enableDebug, "1") == 0) {
-    debugMode_ = 1;
-  }
 }
 
 flagcxC2cPlanner::~flagcxC2cPlanner() {}
@@ -1563,9 +1559,9 @@ flagcxResult_t flagcxC2cPlanner::execute(const void *sendbuff, void *recvbuff,
           : recvTmpBuff;
 
   // execute preHomoFuncs
-  if (debugMode_) {
-    preHomoStartTime_ = clockDebug();
-  }
+#ifdef FLAGCX_ALGO_DEBUG
+  preHomoStartTime_ = clockDebug();
+#endif
   cclAdaptors[flagcxCCLAdaptorDevice]->groupStart();
   for (int i = 0; i < preHomoFuncLoops_; ++i) {
     preHomoFuncList_[i].run(sendbuff, recvTmpBuff, datatype, redOp_,
@@ -1573,14 +1569,14 @@ flagcxResult_t flagcxC2cPlanner::execute(const void *sendbuff, void *recvbuff,
                             sendCounts_, sDispls_, recvCounts_, rDispls_);
   }
   cclAdaptors[flagcxCCLAdaptorDevice]->groupEnd();
-  if (debugMode_) {
-    deviceAdaptor->streamSynchronize(stream);
-    FLAGCXCHECK(bootstrapBarrier(comm_->hetero_comm->bootstrap, rank_,
-                                 comm_->nranks, 0));
-    preHomoEndTime_ = clockDebug();
-    double preHomoTime = preHomoEndTime_ - preHomoStartTime_;
-    INFO(FLAGCX_COLL, "preHomoTime for rank %d: %lf us", rank_, preHomoTime);
-  }
+#ifdef FLAGCX_ALGO_DEBUG
+  deviceAdaptor->streamSynchronize(stream);
+  FLAGCXCHECK(
+      bootstrapBarrier(comm_->hetero_comm->bootstrap, rank_, comm_->nranks, 0));
+  preHomoEndTime_ = clockDebug();
+  double preHomoTime = preHomoEndTime_ - preHomoStartTime_;
+  INFO(FLAGCX_COLL, "preHomoTime for rank %d: %lf us", rank_, preHomoTime);
+#endif
 
   for (int i = 0; i < heteroAndHomoInterFuncLoops_; ++i) {
     // execute refreshFunc
@@ -1590,42 +1586,42 @@ flagcxResult_t flagcxC2cPlanner::execute(const void *sendbuff, void *recvbuff,
     // deviceAdaptor->streamSynchronize(stream);
 
     // execute heteroFuncs
-    if (debugMode_) {
-      heteroStartTime_ = clockDebug();
-    }
+#ifdef FLAGCX_ALGO_DEBUG
+    heteroStartTime_ = clockDebug();
+#endif
     heteroFuncList_[i].run(sendTmpBuff, recvTmpBuff, datatype, comm_, stream);
 
     // TODO: use stream wait rather than stream sync to avoid cpu blocking
     deviceAdaptor->streamSynchronize(stream);
-    if (debugMode_) {
-      FLAGCXCHECK(bootstrapBarrier(comm_->hetero_comm->bootstrap, rank_,
-                                   comm_->nranks, 0));
-      heteroEndTime_ = clockDebug();
-      double heteroTime = heteroEndTime_ - heteroStartTime_;
-      INFO(FLAGCX_COLL, "heteroTime for rank %d: %lf us", rank_, heteroTime);
-    }
+#ifdef FLAGCX_ALGO_DEBUG
+    FLAGCXCHECK(bootstrapBarrier(comm_->hetero_comm->bootstrap, rank_,
+                                 comm_->nranks, 0));
+    heteroEndTime_ = clockDebug();
+    double heteroTime = heteroEndTime_ - heteroStartTime_;
+    INFO(FLAGCX_COLL, "heteroTime for rank %d: %lf us", rank_, heteroTime);
+#endif
 
     // execute homoInterFuncs
-    if (debugMode_) {
-      homoInterStartTime_ = clockDebug();
-    }
+#ifdef FLAGCX_ALGO_DEBUG
+    homoInterStartTime_ = clockDebug();
+#endif
     homoInterFuncList_[i].run(sendTmpBuff, recvTmpBuff, datatype, redOp_,
                               comm_->globalrank2homorank[root], comm_, stream);
-    if (debugMode_) {
-      deviceAdaptor->streamSynchronize(stream);
-      FLAGCXCHECK(bootstrapBarrier(comm_->hetero_comm->bootstrap, rank_,
-                                   comm_->nranks, 0));
-      homoInterEndTime_ = clockDebug();
-      double homoInterTime = homoInterEndTime_ - homoInterStartTime_;
-      INFO(FLAGCX_COLL, "homoInterTime for rank %d: %lf us", rank_,
-           homoInterTime);
-    }
+#ifdef FLAGCX_ALGO_DEBUG
+    deviceAdaptor->streamSynchronize(stream);
+    FLAGCXCHECK(bootstrapBarrier(comm_->hetero_comm->bootstrap, rank_,
+                                 comm_->nranks, 0));
+    homoInterEndTime_ = clockDebug();
+    double homoInterTime = homoInterEndTime_ - homoInterStartTime_;
+    INFO(FLAGCX_COLL, "homoInterTime for rank %d: %lf us", rank_,
+         homoInterTime);
+#endif
   }
 
   // execute postHomoFuns
-  if (debugMode_) {
-    postHomoStartTime_ = clockDebug();
-  }
+#ifdef FLAGCX_ALGO_DEBUG
+  postHomoStartTime_ = clockDebug();
+#endif
   cclAdaptors[flagcxCCLAdaptorDevice]->groupStart();
   for (int i = 0; i < postHomoFuncLoops_; ++i) {
     // execute refresh func
@@ -1636,14 +1632,14 @@ flagcxResult_t flagcxC2cPlanner::execute(const void *sendbuff, void *recvbuff,
                              comm_->globalrank2homorank[root], comm_, stream);
   }
   cclAdaptors[flagcxCCLAdaptorDevice]->groupEnd();
-  if (debugMode_) {
-    deviceAdaptor->streamSynchronize(stream);
-    FLAGCXCHECK(bootstrapBarrier(comm_->hetero_comm->bootstrap, rank_,
-                                 comm_->nranks, 0));
-    postHomoEndTime_ = clockDebug();
-    double postHomoTime = postHomoEndTime_ - postHomoStartTime_;
-    INFO(FLAGCX_COLL, "postHomoTime for rank %d: %lf us", rank_, postHomoTime);
-  }
+#ifdef FLAGCX_ALGO_DEBUG
+  deviceAdaptor->streamSynchronize(stream);
+  FLAGCXCHECK(
+      bootstrapBarrier(comm_->hetero_comm->bootstrap, rank_, comm_->nranks, 0));
+  postHomoEndTime_ = clockDebug();
+  double postHomoTime = postHomoEndTime_ - postHomoStartTime_;
+  INFO(FLAGCX_COLL, "postHomoTime for rank %d: %lf us", rank_, postHomoTime);
+#endif
 
   // free scratch buffer if needed
   if (scratchBuffer_ != nullptr) {
