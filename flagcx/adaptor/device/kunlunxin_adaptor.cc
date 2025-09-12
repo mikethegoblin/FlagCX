@@ -19,8 +19,10 @@ flagcxResult_t kunlunAdaptorDeviceMemcpy(void *dst, void *src, size_t size,
   if (stream == NULL) {
     DEVCHECK(cudaMemcpy(dst, src, size, memcpy_type_map[type]));
   } else {
+    INFO(FLAGCX_COLL, "start memcpy");
     DEVCHECK(
         cudaMemcpyAsync(dst, src, size, memcpy_type_map[type], stream->base));
+    INFO(FLAGCX_COLL, "finished memcpy");
   }
   return flagcxSuccess;
 }
@@ -46,7 +48,8 @@ flagcxResult_t kunlunAdaptorDeviceMalloc(void **ptr, size_t size,
                                          flagcxMemType_t type,
                                          flagcxStream_t stream) {
   if (type == flagcxMemHost) {
-    DEVCHECK(cudaMallocHost(ptr, size));
+    //DEVCHECK(cudaMallocHost(ptr, size));
+    DEVCHECK(cudaHostAlloc(ptr, size, cudaHostAllocMapped));
   } else if (type == flagcxMemDevice) {
     if (stream == NULL) {
       DEVCHECK(cudaMalloc(ptr, size));
@@ -140,9 +143,11 @@ flagcxResult_t kunlunAdaptorGdrPtrMunmap(void *cpuptr, size_t sz) {
 
 flagcxResult_t kunlunAdaptorStreamCreate(flagcxStream_t *stream) {
   (*stream) = NULL;
+  INFO(FLAGCX_PROXY, "kunlun creating stream");
   flagcxCalloc(stream, 1);
   DEVCHECK(cudaStreamCreateWithFlags((cudaStream_t *)(*stream),
                                      cudaStreamNonBlocking));
+  INFO(FLAGCX_PROXY, "kunlun finished creating stream");
   return flagcxSuccess;
 }
 

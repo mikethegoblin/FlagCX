@@ -185,14 +185,20 @@ static flagcxResult_t progressOps(struct flagcxProxyState *proxyState,
             struct sendNetResources *resources =
                 (sendNetResources *)op->connection->transportResources;
             flagcxProxySend(resources, op->recvbuff, op->nbytes, &op->args);
+            INFO(FLAGCX_COLL, "BP5: finished flagcxProxySend, args.done=%d, eventRecorded=%d", op->args.done, op->args.eventRecorded);
             if (op->args.done == 1 && op->args.eventRecorded) {
               // The P2P object should not be destroyed until the associated
               // event has completed
+              INFO(FLAGCX_COLL, "BP6: start eventQuery and destroy");
               if (deviceAdaptor->eventQuery(op->event) == flagcxSuccess) {
+                INFO(FLAGCX_COLL, "BP6-1, eventQuery success");
                 flagcxIntruQueueDelete(queue, op);
                 FLAGCXCHECK(deviceAdaptor->eventDestroy(op->event));
+                FLAGCXCHECK(deviceAdaptor->deviceFree(
+                  (void *)op->args.hlArgs, flagcxMemHost, 0));
                 free(op);
               }
+              INFO(FLAGCX_COLL, "BP7: finished eventQuery and destroy");
             }
           }
           queue = &peer->recvQueue;
@@ -202,14 +208,19 @@ static flagcxResult_t progressOps(struct flagcxProxyState *proxyState,
             struct recvNetResources *resources =
                 (recvNetResources *)op->connection->transportResources;
             flagcxProxyRecv(resources, op->recvbuff, op->nbytes, &op->args);
+            INFO(FLAGCX_COLL, "BP5: finished flagcxProxyRecv, args.done=%d, eventRecorded=%d", op->args.done, op->args.eventRecorded);
             if (op->args.done == 1 && op->args.eventRecorded) {
               // The P2P object should not be destroyed until the associated
               // event has completed
+              INFO(FLAGCX_COLL, "BP6: start eventQuery and destroy");
               if (deviceAdaptor->eventQuery(op->event) == flagcxSuccess) {
                 flagcxIntruQueueDelete(queue, op);
                 FLAGCXCHECK(deviceAdaptor->eventDestroy(op->event));
+                FLAGCXCHECK(deviceAdaptor->deviceFree(
+                  (void *)op->args.hlArgs, flagcxMemHost, 0));
                 free(op);
               }
+              INFO(FLAGCX_COLL, "BP7: finished eventQuery and destroy");
             }
           }
           if (flagcxIntruQueueEmpty(&peer->sendQueue) &&

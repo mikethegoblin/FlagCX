@@ -699,6 +699,7 @@ flagcxResult_t flagcxProxySend(sendNetResources *resources, void *data,
   if (!__atomic_load_n(&args->hEventReady, __ATOMIC_RELAXED))
     return flagcxSuccess;
   if (args->transmitted < args->chunkSteps) {
+    INFO(FLAGCX_PROXY, "ProxySend BP0");
     int stepMask = args->sendStepMask;
 
     if (args->waitCopy < args->chunkSteps &&
@@ -722,17 +723,21 @@ flagcxResult_t flagcxProxySend(sendNetResources *resources, void *data,
                                              resources->cpStream));
       args->totalCopySize += args->subs[step].stepSize;
       args->waitCopy++;
+      INFO(FLAGCX_PROXY, "ProxySend BP1");
     }
 
     if (args->copied < args->waitCopy) {
+      INFO(FLAGCX_PROXY, "ProxySend BP2-1");
       int step = args->copied & stepMask;
       if (deviceAdaptor->eventQuery(resources->cpEvents[step]) ==
           flagcxSuccess) {
         args->copied++;
+        INFO(FLAGCX_PROXY, "ProxySend BP2-2, copied=%d", args->copied);
       }
     }
 
     if (args->posted < args->copied) {
+     INFO(FLAGCX_PROXY, "ProxySend BP3-1");
       void *req = NULL;
       resources->flagcxNet->isend(resources->netSendComm,
                                   args->subs[args->posted & stepMask].stepBuff,
@@ -740,25 +745,34 @@ flagcxResult_t flagcxProxySend(sendNetResources *resources, void *data,
                                   0, resources->mhandles[0], &req);
       if (req) {
         args->subs[args->posted++ & stepMask].requests[0] = req;
+        INFO(FLAGCX_PROXY, "ProxySend BP3-2, posted=%d", args->posted);
       }
     }
 
     if (args->transmitted < args->posted) {
       void *req = args->subs[args->transmitted & stepMask].requests[0];
       int done = 0, sizes;
+      INFO(FLAGCX_PROXY, "ProxySend BP4-1 with done=%d", done);
       resources->flagcxNet->test(req, &done, &sizes);
       if (done) {
         args->transmitted++;
+        INFO(FLAGCX_PROXY, "ProxySend BP4-2 with done=%d", done);
       }
     }
   } else {
+    INFO(FLAGCX_PROXY, "ProxySend BP5-1, transmitted all");
     if (args->done != 1) {
-      __atomic_store_n(&args->hlArgs, 1, __ATOMIC_RELAXED);
+      INFO(FLAGCX_PROXY, "ProxySend before setting hlArgs");
+      __atomic_store_n(args->hlArgs, 1, __ATOMIC_RELAXED);
+      INFO(FLAGCX_PROXY, "ProxySend after setting hlArgs");
       if (deviceAsyncLoad && deviceAsyncStore) {
         if (args->deviceFuncRelaxedOrdering == 1) {
+          INFO(FLAGCX_PROXY, "ProxySend BP5-2: flagcxProxySend start copying hlArgs to dlArgs");
           FLAGCXCHECK(deviceAdaptor->deviceMemcpy(
-              args->dlArgs, (void *)&args->hlArgs, sizeof(bool),
-              flagcxMemcpyHostToDevice, resources->cpStream, NULL));
+              args->dlArgs, (void *)args->hlArgs, sizeof(bool),
+              flagcxMemcpyHostToDevice, resources->tempStream, NULL));
+          //deviceAdaptor->streamSynchronize(resources->tempStream);
+          INFO(FLAGCX_PROXY, "ProxySend BP5-3: flagcxProxySend finished copying hlArgs to dlArgs");
         }
       }
       args->done = 1;
@@ -772,9 +786,11 @@ flagcxResult_t flagcxProxyRecv(recvNetResources *resources, void *data,
   if (!__atomic_load_n(&args->hEventReady, __ATOMIC_RELAXED))
     return flagcxSuccess;
   if (args->copied < args->chunkSteps) {
+    INFO(FLAGCX_PROXY, "ProxyRecv BP0");
     int stepMask = args->sendStepMask;
     if (args->posted < args->chunkSteps &&
         args->posted - args->copied < MAXSTEPS) {
+      INFO(FLAGCX_PROXY, "ProxyRecv BP1-1");
       int tags[8] = {0};
       void *req = NULL;
       args->subs[args->posted & stepMask].stepSize =
@@ -789,19 +805,23 @@ flagcxResult_t flagcxProxyRecv(recvNetResources *resources, void *data,
       if (req) {
         args->subs[args->posted & stepMask].requests[0] = req;
         args->totalPostSize += args->subs[args->posted++ & stepMask].stepSize;
+        INFO(FLAGCX_PROXY, "ProxyRecv BP1-2");
       }
     }
 
     if (args->transmitted < args->posted) {
       void *req = args->subs[args->transmitted & stepMask].requests[0];
       int done = 0, sizes;
+      INFO(FLAGCX_PROXY, "ProxyRecv BP2-1 with done=%d", done);
       resources->flagcxNet->test(req, &done, &sizes);
       if (done) {
         args->transmitted++;
+        INFO(FLAGCX_PROXY, "ProxyRecv BP2-2 with done=%d", done);
       }
     }
 
     if (args->postFlush < args->transmitted) {
+      INFO(FLAGCX_PROXY, "ProxyRecv BP3-1");
       if (resources->flagcxNet == &flagcxNetIb) {
         void *req = NULL;
         void *allData[] = {args->subs[args->postFlush & stepMask].stepBuff};
@@ -811,15 +831,18 @@ flagcxResult_t flagcxProxyRecv(recvNetResources *resources, void *data,
             resources->mhandles, &req);
         if (req) {
           args->subs[args->postFlush++ & stepMask].requests[0] = req;
+          INFO(FLAGCX_PROXY, "ProxyRecv BP3-2, postFlush=%d", args->postFlush);
         };
       } else if (resources->flagcxNet == &flagcxNetSocket) {
         args->subs[args->postFlush & stepMask].requests[0] = (void *)0x1;
         args->postFlush++;
+        INFO(FLAGCX_PROXY, "ProxyRecv BP3-2, postFlush=%d", args->postFlush);
       }
     }
     if (args->flushed < args->postFlush) {
       void *req = args->subs[args->flushed & stepMask].requests[0];
       int done = 0, sizes;
+      INFO(FLAGCX_PROXY, "ProxyRecv BP4-1");
       if (resources->flagcxNet == &flagcxNetSocket && req == (void *)0x1) {
         done = 1;
         sizes = 0;
@@ -828,10 +851,12 @@ flagcxResult_t flagcxProxyRecv(recvNetResources *resources, void *data,
       }
       if (done) {
         args->flushed++;
+        INFO(FLAGCX_PROXY, "ProxyRecv BP4-2, flushed=%d", args->flushed);
       }
     }
 
     if (args->waitCopy < args->flushed) {
+      INFO(FLAGCX_PROXY, "ProxyRecv BP5-1");
       int step = args->waitCopy & stepMask;
       if (resources->flagcxNet == &flagcxNetIb) {
         FLAGCXCHECK(deviceAdaptor->deviceMemcpy(
@@ -844,28 +869,36 @@ flagcxResult_t flagcxProxyRecv(recvNetResources *resources, void *data,
             args->subs[step].stepSize, flagcxMemcpyHostToDevice,
             resources->cpStream, args->subs[step].copyArgs));
       }
+      INFO(FLAGCX_PROXY, "ProxyRecv BP5-2");
       FLAGCXCHECK(deviceAdaptor->eventRecord(resources->cpEvents[step],
                                              resources->cpStream));
       args->totalCopySize += args->subs[step].stepSize;
       args->waitCopy++;
+      INFO(FLAGCX_PROXY, "ProxyRecv BP5-3, waitCopy=%d", args->waitCopy);
     }
 
     if (args->copied < args->waitCopy) {
+      INFO(FLAGCX_PROXY, "ProxyRecv BP6-1");
       int step = args->copied & stepMask;
       if (deviceAdaptor->eventQuery(resources->cpEvents[step]) ==
           flagcxSuccess) {
         args->copied++;
+        INFO(FLAGCX_PROXY, "ProxyRecv BP6-2, copied=%d", args->copied);
       }
     }
 
   } else {
+      INFO(FLAGCX_PROXY, "ProxyRecv BP7-1, flagcxProxyRecv copied all");
     if (args->done != 1) {
-      __atomic_store_n(&args->hlArgs, 1, __ATOMIC_RELAXED);
+      __atomic_store_n(args->hlArgs, 1, __ATOMIC_RELAXED);
       if (deviceAsyncLoad && deviceAsyncStore) {
         if (args->deviceFuncRelaxedOrdering == 1) {
+          INFO(FLAGCX_PROXY, "ProxyRecv BP7-2: flagcxProxyRecv start copying hlArgs to dlArgs");
           FLAGCXCHECK(deviceAdaptor->deviceMemcpy(
-              args->dlArgs, (void *)&args->hlArgs, sizeof(bool),
-              flagcxMemcpyHostToDevice, resources->cpStream, NULL));
+              args->dlArgs, (void *)args->hlArgs, sizeof(bool),
+              flagcxMemcpyHostToDevice, resources->tempStream, NULL));
+          //deviceAdaptor->streamSynchronize(resources->tempStream);
+          INFO(FLAGCX_PROXY, "ProxyRecv BP7-3: flagcxProxyRecv finished copying hlArgs to dlArgs");
         }
       }
       args->done = 1;
@@ -878,6 +911,7 @@ flagcxResult_t flagcxSendProxyFree(sendNetResources *resources) {
   for (int s = 0; s < MAXSTEPS; s++) {
     FLAGCXCHECK(deviceAdaptor->eventDestroy(resources->cpEvents[s]));
   }
+  FLAGCXCHECK(deviceAdaptor->streamDestroy(resources->tempStream));
   FLAGCXCHECK(deviceAdaptor->streamDestroy(resources->cpStream));
   resources->flagcxNet->deregMr(resources->netSendComm, resources->mhandles[0]);
   resources->flagcxNet->closeSend(resources->netSendComm);
@@ -889,6 +923,7 @@ flagcxResult_t flagcxRecvProxyFree(recvNetResources *resources) {
   for (int s = 0; s < MAXSTEPS; s++) {
     FLAGCXCHECK(deviceAdaptor->eventDestroy(resources->cpEvents[s]));
   }
+  FLAGCXCHECK(deviceAdaptor->streamDestroy(resources->tempStream));
   FLAGCXCHECK(deviceAdaptor->streamDestroy(resources->cpStream));
   resources->flagcxNet->deregMr(resources->netRecvComm, resources->mhandles[0]);
   resources->flagcxNet->closeRecv(resources->netRecvComm);

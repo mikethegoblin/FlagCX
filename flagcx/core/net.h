@@ -58,6 +58,7 @@ struct sendNetResources {
   flagcxNetDeviceType netDeviceType;
   flagcxNetDeviceHandle_t *netDeviceHandle;
   flagcxStream_t cpStream;
+  flagcxStream_t tempStream;
   flagcxEvent_t cpEvents[MAXSTEPS];
 };
 
@@ -93,6 +94,7 @@ struct recvNetResources {
   flagcxNetDeviceType netDeviceType;
   flagcxNetDeviceHandle_t *netDeviceHandle;
   flagcxStream_t cpStream;
+  flagcxStream_t tempStream;
   flagcxEvent_t cpEvents[MAXSTEPS];
 };
 
