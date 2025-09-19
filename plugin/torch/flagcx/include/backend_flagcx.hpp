@@ -82,7 +82,8 @@ public:
   c10::intrusive_ptr<Work> endCoalescing() override;
 
   const std::string getBackendName() const override {
-    return std::string(FLAGCX_BACKEND_NAME);
+    static const std::string name{FLAGCX_BACKEND_NAME};
+    return name;
   }
 
   // For specifying a composite optype, such as ALLGATHER and REDUCE_SCATTER
