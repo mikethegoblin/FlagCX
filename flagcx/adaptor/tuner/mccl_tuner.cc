@@ -1,7 +1,7 @@
 #include "tuner/tuner_util.h"
 
 #ifdef USE_METAX_ADAPTOR
-static EnvVar algo("MCCL_ALGO", {"ring", "tree", "collnet"}, "ring");
+static EnvVar algo("MCCL_ALGO", {"ring", "tree"}, "ring");
 
 static EnvVar proto("MCCL_PROTO", {"LL", "LL128", "Simple"}, "Simple");
 
