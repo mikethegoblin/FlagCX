@@ -271,6 +271,14 @@ static flagcxResult_t findBestComm(struct flagcxTunerContext *ctx,
                                static_cast<uint32_t>(seqId), idx);
     struct flagcxRecordKey<TunerProfileKey> rkey(profileKey);
     float duration = ctx->timer.getRecord(rkey, true);
+
+    if (duration <= 0) {
+      // no profiling data for this communicator and collective category
+      WARN("No profiling data for (commId=%d,coll=%d,size=%zu,seq=%u).", idx,
+           cat.collType, cat.nBytes, seqId);
+      continue;
+    }
+
     INFO(FLAGCX_TUNING, "before allgather, duration for rank %d is %.3fms",
          internalTuner.rank, duration);
     float *durationResults = NULL;
@@ -278,8 +286,7 @@ static flagcxResult_t findBestComm(struct flagcxTunerContext *ctx,
     memcpy(durationResults + internalTuner.rank, &duration, sizeof(float));
     // get average duration across all ranks
     FLAGCXCHECK(bootstrapAllGather(internalTuner.commState,
-                                   (void *)durationResults,
-                                   sizeof(durationResults)));
+                                   (void *)durationResults, sizeof(float)));
     FLAGCXCHECK(bootstrapBarrier(internalTuner.commState, internalTuner.rank,
                                  internalTuner.nranks, 0));
     duration = 0.0f;
@@ -290,13 +297,6 @@ static flagcxResult_t findBestComm(struct flagcxTunerContext *ctx,
     free(durationResults);
     INFO(FLAGCX_TUNING, "after allgather, duration for rank %d is %.3fms",
          internalTuner.rank, duration);
-
-    if (duration <= 0) {
-      // no profiling data for this communicator and collective category
-      WARN("No profiling data for (commId=%d,coll=%d,size=%zu,seq=%u).", idx,
-           cat.collType, cat.nBytes, seqId);
-      continue;
-    }
 
     INFO(FLAGCX_TUNING,
          "Profiling data for (commId=%d,coll=%d,size=%zu,seq=%u) is %.3fms.",
