@@ -271,12 +271,33 @@ static flagcxResult_t findBestComm(struct flagcxTunerContext *ctx,
                                static_cast<uint32_t>(seqId), idx);
     struct flagcxRecordKey<TunerProfileKey> rkey(profileKey);
     float duration = ctx->timer.getRecord(rkey, true);
+    INFO(FLAGCX_TUNING, "before allgather, duration for rank %d is %.3fms",
+         internalTuner.rank, duration);
+    float *durationResults = NULL;
+    FLAGCXCHECK(flagcxCalloc(&durationResults, internalTuner.nranks));
+    memcpy(durationResults + internalTuner.rank, &duration, sizeof(float));
+    // get average duration across all ranks
+    FLAGCXCHECK(bootstrapAllGather(internalTuner.commState,
+                                   (void *)durationResults,
+                                   sizeof(durationResults)));
+    FLAGCXCHECK(bootstrapBarrier(internalTuner.commState, internalTuner.rank,
+                                 internalTuner.nranks, 0));
+    duration = 0.0f;
+    for (int i = 0; i < internalTuner.nranks; ++i) {
+      duration += durationResults[i];
+    }
+    duration /= internalTuner.nranks;
+    free(durationResults);
+    INFO(FLAGCX_TUNING, "after allgather, duration for rank %d is %.3fms",
+         internalTuner.rank, duration);
+
     if (duration <= 0) {
       // no profiling data for this communicator and collective category
       WARN("No profiling data for (commId=%d,coll=%d,size=%zu,seq=%u).", idx,
            cat.collType, cat.nBytes, seqId);
       continue;
     }
+
     INFO(FLAGCX_TUNING,
          "Profiling data for (commId=%d,coll=%d,size=%zu,seq=%u) is %.3fms.",
          idx, cat.collType, cat.nBytes, seqId, duration);
@@ -452,6 +473,9 @@ flagcxResult_t flagcxTunerDestroy(void *context) {
 }
 
 flagcxTuner_t internalTuner = {"internal tuner",
+                               NULL, // assigned during flagcxCommInit
+                               0,
+                               0,
                                flagcxTunerInit,
                                flagcxTunerGetCandidateNumber,
                                flagcxTunerSetCandidate,
