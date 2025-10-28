@@ -282,8 +282,6 @@ static flagcxResult_t findBestComm(struct flagcxTunerContext *ctx,
       continue;
     }
 
-    INFO(FLAGCX_TUNING, "before allgather, duration for rank %d is %.3fms",
-         internalTuner.rank, duration);
     memcpy(internalTuner.profilingResults + internalTuner.rank, &duration,
            sizeof(float));
     // get average duration across all ranks
@@ -297,8 +295,6 @@ static flagcxResult_t findBestComm(struct flagcxTunerContext *ctx,
       duration += internalTuner.profilingResults[i];
     }
     duration /= internalTuner.nranks;
-    INFO(FLAGCX_TUNING, "after allgather, duration for rank %d is %.3fms",
-         internalTuner.rank, duration);
 
     INFO(FLAGCX_TUNING,
          "Profiling data for (commId=%d,coll=%d,size=%zu,seq=%u) is %.3fms.",
