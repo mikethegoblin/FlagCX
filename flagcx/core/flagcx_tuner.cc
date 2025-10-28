@@ -187,6 +187,9 @@ flagcxResult_t flagcxTunerInit(size_t nRanks, size_t nNodes,
     }
   }
 
+  // initialize profilingResults pointer
+  FLAGCXCHECK(
+      flagcxCalloc(&internalTuner.profilingResults, internalTuner.nranks));
   // start timer
   ctx->timer.start();
   return flagcxSuccess;
@@ -281,20 +284,19 @@ static flagcxResult_t findBestComm(struct flagcxTunerContext *ctx,
 
     INFO(FLAGCX_TUNING, "before allgather, duration for rank %d is %.3fms",
          internalTuner.rank, duration);
-    float *durationResults = NULL;
-    FLAGCXCHECK(flagcxCalloc(&durationResults, internalTuner.nranks));
-    memcpy(durationResults + internalTuner.rank, &duration, sizeof(float));
+    memcpy(internalTuner.profilingResults + internalTuner.rank, &duration,
+           sizeof(float));
     // get average duration across all ranks
-    FLAGCXCHECK(bootstrapAllGather(internalTuner.commState,
-                                   (void *)durationResults, sizeof(float)));
-    FLAGCXCHECK(bootstrapBarrier(internalTuner.commState, internalTuner.rank,
+    FLAGCXCHECK(bootstrapAllGather(internalTuner.bootstrap,
+                                   (void *)internalTuner.profilingResults,
+                                   sizeof(float)));
+    FLAGCXCHECK(bootstrapBarrier(internalTuner.bootstrap, internalTuner.rank,
                                  internalTuner.nranks, 0));
     duration = 0.0f;
     for (int i = 0; i < internalTuner.nranks; ++i) {
-      duration += durationResults[i];
+      duration += internalTuner.profilingResults[i];
     }
     duration /= internalTuner.nranks;
-    free(durationResults);
     INFO(FLAGCX_TUNING, "after allgather, duration for rank %d is %.3fms",
          internalTuner.rank, duration);
 
@@ -468,14 +470,16 @@ flagcxResult_t flagcxTunerDestroy(void *context) {
 
   // stop timer
   ctx->timer.stop();
+  free(internalTuner.profilingResults);
   delete ctx;
   return flagcxSuccess;
 }
 
 flagcxTuner_t internalTuner = {"internal tuner",
                                NULL, // assigned during flagcxCommInit
-                               0,
-                               0,
+                               0,    // assigned during flagcxCommInit
+                               0,    // assigned during flagcxCommInit
+                               NULL, // initialized during tunerInit
                                flagcxTunerInit,
                                flagcxTunerGetCandidateNumber,
                                flagcxTunerSetCandidate,
