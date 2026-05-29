@@ -13,9 +13,11 @@
 #ifndef FLAGCX_P2P_H_
 #define FLAGCX_P2P_H_
 
+#include <atomic>
 #include <cstring>
 #include <stddef.h>
 #include <stdint.h>
+#include <string>
 #include <vector>
 
 /* ------------------------------------------------------------------ */
@@ -88,6 +90,51 @@ inline void flagcxP2pDeserializeRdmaDesc(const char *buf,
   std::memcpy(&desc->idx, buf + 24, sizeof(uint64_t));
   std::memcpy(desc->padding, buf + 32, sizeof(desc->padding));
 }
+
+/* ------------------------------------------------------------------ */
+/*  Slice / transfer-task types (shared by engine and adaptor)        */
+/* ------------------------------------------------------------------ */
+
+struct FlagcxTransferTask {
+  std::atomic<uint64_t> sliceCount{0};
+  std::atomic<uint64_t> doneSliceCount{0};
+  std::vector<struct FlagcxSlice *> sliceList;
+
+  bool isAllDone() const {
+    auto total = sliceCount.load(std::memory_order_acquire);
+    auto done = doneSliceCount.load(std::memory_order_acquire);
+    return total > 0 && done >= total;
+  }
+};
+
+enum FlagcxSliceOp : uint8_t {
+  FLAGCX_SLICE_OP_WRITE = 0,
+  FLAGCX_SLICE_OP_READ = 1,
+};
+
+struct FlagcxSlice {
+  // WRITE: local source VA; READ: local destination VA.
+  uint64_t srcVa = 0;
+  // WRITE: remote destination VA; READ: remote source VA.
+  uint64_t dstVa;
+  uint32_t length;
+  uint32_t lkey;
+  uint32_t rkey;
+  uint8_t opcode;
+  std::string peerNicPath;
+  FlagcxTransferTask *task;
+  volatile int *qpDepth;
+
+  inline void markSuccess() {
+    if (task)
+      task->doneSliceCount.fetch_add(1, std::memory_order_release);
+  }
+
+  inline void markFailed() {
+    if (task)
+      task->doneSliceCount.fetch_add(1, std::memory_order_release);
+  }
+};
 
 /* ------------------------------------------------------------------ */
 /*  Notification message                                              */
@@ -471,12 +518,5 @@ const FlagcxP2pGlobalConfig &flagcxP2pGlobalConfig();
 /* Logs the resolved config once. Implicitly invoked at first
    flagcxP2pGlobalConfig() call. */
 void flagcxP2pDumpGlobalConfig();
-
-/* Clamp size-limited fields against ibv_query_device() results — call
-   once from the adaptor's init path after IB attributes are known. The
-   four uint32 inputs are the obvious ibv_device_attr counterparts; we
-   take plain ints to keep verbs out of this header. */
-void flagcxP2pClampToDeviceLimits(uint32_t maxQpWr, uint32_t maxSge,
-                                  uint32_t maxCqe, uint32_t maxQp);
 
 #endif /* FLAGCX_P2P_H_ */
