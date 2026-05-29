@@ -27,8 +27,6 @@
 #include <unistd.h>
 #include <vector>
 
-struct FlagcxSlice;
-
 extern struct ibv_cq *flagcxP2pPoolGetSharedCq(int ibDevN,
                                                struct ibv_context *ctx);
 extern void flagcxP2pPoolRegisterQp(int ibDevN, void *sendComm,
@@ -40,45 +38,6 @@ extern flagcxResult_t flagcxP2pPoolSubmit(int ibDevN, void *sendComm,
 /* ------------------------------------------------------------------ */
 /*  Internal structs                                                   */
 /* ------------------------------------------------------------------ */
-
-struct FlagcxTransferTask {
-  std::atomic<uint64_t> sliceCount{0};
-  std::atomic<uint64_t> doneSliceCount{0};
-  std::vector<FlagcxSlice *> sliceList;
-
-  bool isAllDone() const {
-    auto total = sliceCount.load(std::memory_order_acquire);
-    auto done = doneSliceCount.load(std::memory_order_acquire);
-    return total > 0 && done >= total;
-  }
-};
-
-enum FlagcxSliceOp : uint8_t {
-  FLAGCX_SLICE_OP_WRITE = 0,
-  FLAGCX_SLICE_OP_READ = 1,
-};
-
-struct FlagcxSlice {
-  uint64_t srcVa;
-  uint64_t dstVa;
-  uint32_t length;
-  uint32_t lkey;
-  uint32_t rkey;
-  uint8_t opcode;
-  std::string peerNicPath;
-  FlagcxTransferTask *task;
-  volatile int *qpDepth;
-
-  inline void markSuccess() {
-    if (task)
-      task->doneSliceCount.fetch_add(1, std::memory_order_release);
-  }
-
-  inline void markFailed() {
-    if (task)
-      task->doneSliceCount.fetch_add(1, std::memory_order_release);
-  }
-};
 
 // Per-device context — created at init, holds eagerly allocated PD.
 // Passed as the `comm` parameter to regMr/deregMr when no connection exists.
