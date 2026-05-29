@@ -341,14 +341,14 @@ inline void flagcxBuildSlices(FlagcxTransferTask *task, uint64_t srcVa,
   }
 }
 
+static void notifPollThreadFunc(FlagcxP2pEngine *engine);
+
 namespace {
 
 struct PoolSubmitItem {
   void *sendComm;       // adaptor sendComm view
   FlagcxSlice *slice;   // owned by caller (engine ReadVector/WriteVector)
 };
-
-static void notifPollThreadFunc(FlagcxP2pEngine *engine);
 
 struct PoolQpEntry {
   struct ibv_qp *qp;

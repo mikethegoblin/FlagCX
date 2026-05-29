@@ -717,7 +717,7 @@ static flagcxResult_t flagcxP2pIputSignal(void *, uint64_t, uint64_t, size_t,
 /*  Slice batch: pool worker passes the chosen QP. wr_id = ptr|1.      */
 /* ------------------------------------------------------------------ */
 
-static inline uint32_t flagcxSliceOpcodeToVerbs(uint8_t op) {
+static inline enum ibv_wr_opcode flagcxSliceOpcodeToVerbs(uint8_t op) {
   return op == FLAGCX_SLICE_OP_READ ? IBV_WR_RDMA_READ : IBV_WR_RDMA_WRITE;
 }
 
