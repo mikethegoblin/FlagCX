@@ -480,15 +480,14 @@ int flagcxP2pEngineUpdateIpcInfo(char *ipcBuf, uintptr_t addr,
 struct FlagcxP2pGlobalConfig {
   /* Worker pool / QP topology */
   int qpsPerConn = 4;        /* FLAGCX_P2P_QPS_PER_CONN          */
-  int workersPerPool = 2;    /* FLAGCX_P2P_WORKERS_PER_POOL      */
+  int workersPerPool = 4;    /* FLAGCX_P2P_WORKERS_PER_POOL      */
   int shardCount = 8;        /* FLAGCX_P2P_SHARD_COUNT           */
 
   /* CQ / WR / completion-queue depth */
   size_t sharedCqDepth = 4096;  /* FLAGCX_P2P_CQ_DEPTH           */
   size_t maxWrPerPost = 256;    /* FLAGCX_P2P_MAX_WR_PER_POST    */
   size_t maxRequests = 256;     /* FLAGCX_P2P_MAX_REQUESTS       */
-  size_t batchPollSize = 32;    /* FLAGCX_P2P_BATCH_POLL_SIZE    */
-  size_t readBatchWindow = 8;   /* FLAGCX_P2P_READ_BATCH_WINDOW  */
+  size_t batchPollSize = 64;    /* FLAGCX_P2P_BATCH_POLL_SIZE    */
 
   /* Slice cut policy */
   size_t sliceSize = 64 * 1024;     /* FLAGCX_P2P_SLICE_SIZE      */

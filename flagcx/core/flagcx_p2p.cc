@@ -51,13 +51,12 @@ extern "C" flagcxResult_t flagcxP2pSliceBatch(void *sendComm,
 namespace {
 
 FLAGCX_PARAM(P2pQpsPerConn,        "P2P_QPS_PER_CONN",        4);
-FLAGCX_PARAM(P2pWorkersPerPool,    "P2P_WORKERS_PER_POOL",    2);
+FLAGCX_PARAM(P2pWorkersPerPool,    "P2P_WORKERS_PER_POOL",    4);
 FLAGCX_PARAM(P2pShardCount,        "P2P_SHARD_COUNT",         8);
 FLAGCX_PARAM(P2pCqDepth,           "P2P_CQ_DEPTH",            4096);
 FLAGCX_PARAM(P2pMaxWrPerPost,      "P2P_MAX_WR_PER_POST",     64);
 FLAGCX_PARAM(P2pMaxRequests,       "P2P_MAX_REQUESTS",        256);
-FLAGCX_PARAM(P2pBatchPollSize,     "P2P_BATCH_POLL_SIZE",     32);
-FLAGCX_PARAM(P2pReadBatchWindow,   "P2P_READ_BATCH_WINDOW",   8);
+FLAGCX_PARAM(P2pBatchPollSize,     "P2P_BATCH_POLL_SIZE",     64);
 FLAGCX_PARAM(P2pSliceSize,         "P2P_SLICE_SIZE",          65536);
 FLAGCX_PARAM(P2pFragmentLimit,     "P2P_FRAGMENT_LIMIT",      4096);
 FLAGCX_PARAM(P2pMaxSge,            "P2P_MAX_SGE",             4);
@@ -83,13 +82,12 @@ inline T clampParam(int64_t v, T lo, T hi, T deft, const char *name) {
 
 void loadGlobalConfig(FlagcxP2pGlobalConfig &c) {
   c.qpsPerConn      = clampParam<int>(flagcxParamP2pQpsPerConn(),     1, kFlagcxP2pMaxQpsPerEngine, 4, "P2P_QPS_PER_CONN");
-  c.workersPerPool  = clampParam<int>(flagcxParamP2pWorkersPerPool(), 1,  8, 2, "P2P_WORKERS_PER_POOL");
+  c.workersPerPool  = clampParam<int>(flagcxParamP2pWorkersPerPool(), 1,  8, 4, "P2P_WORKERS_PER_POOL");
   c.shardCount      = clampParam<int>(flagcxParamP2pShardCount(),     1, 64, 8, "P2P_SHARD_COUNT");
   c.sharedCqDepth   = clampParam<size_t>(flagcxParamP2pCqDepth(),     1, 1u<<20, 4096, "P2P_CQ_DEPTH");
   c.maxWrPerPost    = clampParam<size_t>(flagcxParamP2pMaxWrPerPost(),1, 1024,   256, "P2P_MAX_WR_PER_POST");
   c.maxRequests     = clampParam<size_t>(flagcxParamP2pMaxRequests(), 1, 1u<<16, 256, "P2P_MAX_REQUESTS");
-  c.batchPollSize   = clampParam<size_t>(flagcxParamP2pBatchPollSize(), 1, 256,    32, "P2P_BATCH_POLL_SIZE");
-  c.readBatchWindow = clampParam<size_t>(flagcxParamP2pReadBatchWindow(), 1, 256,   8, "P2P_READ_BATCH_WINDOW");
+  c.batchPollSize   = clampParam<size_t>(flagcxParamP2pBatchPollSize(), 1, 256,    64, "P2P_BATCH_POLL_SIZE");
   c.sliceSize       = clampParam<size_t>(flagcxParamP2pSliceSize(),   1024, 1u<<26, 65536, "P2P_SLICE_SIZE");
   c.fragmentLimit   = clampParam<size_t>(flagcxParamP2pFragmentLimit(), 0, c.sliceSize, 4096, "P2P_FRAGMENT_LIMIT");
   c.maxSge          = clampParam<size_t>(flagcxParamP2pMaxSge(),      1, 32, 4, "P2P_MAX_SGE");
@@ -117,9 +115,6 @@ void dumpGlobalConfigImpl(const FlagcxP2pGlobalConfig &c);
 FlagcxP2pGlobalConfig &mutableGlobalConfig() {
   static FlagcxP2pGlobalConfig cfg;
   static std::once_flag once;
-  // Important: dumpGlobalConfigImpl reads cfg directly (no recursion back
-  // through mutableGlobalConfig), so the lambda is safe to call on the
-  // same thread that holds the once_flag.
   std::call_once(once, [] {
     loadGlobalConfig(cfg);
     dumpGlobalConfigImpl(cfg);
@@ -133,10 +128,8 @@ void dumpGlobalConfigImpl(const FlagcxP2pGlobalConfig &c) {
        "qpsPerConn=%d workersPerPool=%d shardCount=%d",
        c.qpsPerConn, c.workersPerPool, c.shardCount);
   INFO(FLAGCX_INIT,
-       "sharedCqDepth=%zu maxWrPerPost=%zu maxRequests=%zu "
-       "batchPollSize=%zu readBatchWindow=%zu",
-       c.sharedCqDepth, c.maxWrPerPost, c.maxRequests, c.batchPollSize,
-       c.readBatchWindow);
+       "sharedCqDepth=%zu maxWrPerPost=%zu maxRequests=%zu batchPollSize=%zu",
+       c.sharedCqDepth, c.maxWrPerPost, c.maxRequests, c.batchPollSize);
   INFO(FLAGCX_INIT, "sliceSize=%zu fragmentLimit=%zu",
        c.sliceSize, c.fragmentLimit);
   INFO(FLAGCX_INIT,
@@ -345,11 +338,6 @@ static void notifPollThreadFunc(FlagcxP2pEngine *engine);
 
 namespace {
 
-struct PoolSubmitItem {
-  void *sendComm;       // adaptor sendComm view
-  FlagcxSlice *slice;   // owned by caller (engine ReadVector/WriteVector)
-};
-
 struct PoolQpEntry {
   struct ibv_qp *qp;
   void *sendComm;     // owning conn (flagcxP2pSendComm/RecvComm)
@@ -404,11 +392,14 @@ private:
   std::unordered_map<uint32_t, int> qpNumToIdx_;
   std::vector<std::vector<int>> workerQpIdx_;
   std::vector<size_t> workerQpCursor_;
-  std::atomic<int> qpRegisterCounter_{0};
-
-  std::vector<std::vector<PoolSubmitItem>> slice_queues_;
+  std::unordered_map<void *, int> connQpRegCount_;
+  std::vector<std::unordered_map<void *, std::vector<FlagcxSlice *>>>
+      slice_queues_;
   std::unique_ptr<std::mutex[]> slice_locks_;
+  std::unique_ptr<std::atomic<int>[]> slice_queue_count_;
   std::atomic<uint64_t> shardRoundRobin_{0};
+  std::vector<std::unordered_map<void *, std::vector<FlagcxSlice *>>>
+      collective_slice_queue_;
 
   std::atomic<uint64_t> submitted_{0};
   std::atomic<uint64_t> processed_{0};
@@ -443,9 +434,9 @@ FlagcxWorkerPool::FlagcxWorkerPool(int ibDevN, struct ibv_context *ctx)
   }
 
   if (numWorkers_ > 0 && C.qpsPerConn % numWorkers_ != 0) {
-    WARN("NET/IB_P2P : pool[%d] qpsPerConn=%d not divisible by "
-         "workersPerPool=%d — some workers may starve for conns where "
-         "they own no QP",
+    WARN("NET/IB_P2P : pool[%d] qpsPerEngine=%d not divisible by "
+         "workersPerPool=%d — QPs spread per connection but unevenly; some "
+         "workers will own more QPs than others for each conn",
          ibDevN_, C.qpsPerConn, numWorkers_);
   }
 
@@ -463,9 +454,13 @@ FlagcxWorkerPool::FlagcxWorkerPool(int ibDevN, struct ibv_context *ctx)
 
   slice_queues_.resize(numShards_);
   slice_locks_.reset(new std::mutex[numShards_]);
+  slice_queue_count_.reset(new std::atomic<int>[numShards_]);
+  for (int s = 0; s < numShards_; s++)
+    slice_queue_count_[s].store(0, std::memory_order_relaxed);
 
   workerQpIdx_.resize(numWorkers_);
   workerQpCursor_.assign(numWorkers_, 0);
+  collective_slice_queue_.resize(numWorkers_);
 
   transferThreads_.reserve(numWorkers_);
   for (int t = 0; t < numWorkers_; t++) {
@@ -553,9 +548,8 @@ void FlagcxWorkerPool::registerQp(void *sendComm, struct ibv_qp *qp) {
   qpEntries_.emplace_back(new PoolQpEntry(qp, sendComm));
   qpNumToIdx_[qp->qp_num] = idx;
 
-  int slot =
-      qpRegisterCounter_.fetch_add(1, std::memory_order_relaxed) %
-      numWorkers_;
+  int connIdx = connQpRegCount_[sendComm]++;
+  int slot = connIdx % numWorkers_;
   workerQpIdx_[slot].push_back(idx);
 }
 
@@ -568,6 +562,7 @@ void FlagcxWorkerPool::unregisterQp(struct ibv_qp *qp) {
     return;
   int idx = it->second;
   qpNumToIdx_.erase(it);
+  void *sc = qpEntries_[idx]->sendComm;
   for (auto &shard : workerQpIdx_) {
     auto vit = std::find(shard.begin(), shard.end(), idx);
     if (vit != shard.end()) {
@@ -575,6 +570,9 @@ void FlagcxWorkerPool::unregisterQp(struct ibv_qp *qp) {
       break;
     }
   }
+  auto cit = connQpRegCount_.find(sc);
+  if (cit != connQpRegCount_.end() && --cit->second <= 0)
+    connQpRegCount_.erase(cit);
   // Slot kept alive (NULL'd) so any in-flight slice's qpDepth pointer stays valid.
   qpEntries_[idx]->qp = nullptr;
   qpEntries_[idx]->sendComm = nullptr;
@@ -586,22 +584,28 @@ flagcxResult_t FlagcxWorkerPool::submitPostSend(void *sendComm,
   if (count <= 0 || slices == nullptr)
     return flagcxSuccess;
 
-  int shard = (int)(shardRoundRobin_.fetch_add(1, std::memory_order_relaxed) %
-                    numShards_);
+  std::vector<std::vector<FlagcxSlice *>> perShard(numShards_);
   int enqueued = 0;
-  {
-    std::lock_guard<std::mutex> lk(slice_locks_[shard]);
-    auto &q = slice_queues_[shard];
-    q.reserve(q.size() + count);
-    for (int i = 0; i < count; i++) {
-      if (slices[i] == nullptr)
-        continue;
-      q.push_back({sendComm, slices[i]});
-      enqueued++;
-    }
+  for (int i = 0; i < count; i++) {
+    if (slices[i] == nullptr)
+      continue;
+    int shard = (int)(shardRoundRobin_.fetch_add(1, std::memory_order_relaxed) %
+                      numShards_);
+    perShard[shard].push_back(slices[i]);
+    enqueued++;
   }
   if (enqueued == 0)
     return flagcxSuccess;
+
+  for (int s = 0; s < numShards_; s++) {
+    if (perShard[s].empty())
+      continue;
+    std::lock_guard<std::mutex> lk(slice_locks_[s]);
+    auto &vec = slice_queues_[s][sendComm];
+    vec.insert(vec.end(), perShard[s].begin(), perShard[s].end());
+    slice_queue_count_[s].fetch_add((int)perShard[s].size(),
+                                    std::memory_order_relaxed);
+  }
   submitted_.fetch_add(enqueued, std::memory_order_release);
 
   if (suspended_flag_.load(std::memory_order_acquire) > 0) {
@@ -645,6 +649,21 @@ void FlagcxWorkerPool::performPostSend(int tid) {
   if (numWorkers_ <= 0)
     return;
 
+  auto &local = collective_slice_queue_[tid];
+  for (int s = tid; s < numShards_; s += numWorkers_) {
+    if (slice_queue_count_[s].load(std::memory_order_relaxed) == 0)
+      continue;
+    std::lock_guard<std::mutex> lk(slice_locks_[s]);
+    for (auto &entry : slice_queues_[s]) {
+      if (entry.second.empty())
+        continue;
+      auto &dst = local[entry.first];
+      dst.insert(dst.end(), entry.second.begin(), entry.second.end());
+      entry.second.clear();
+    }
+    slice_queue_count_[s].store(0, std::memory_order_relaxed);
+  }
+
   std::vector<PoolQpEntry *> myQpEntries;
   int curMaxDepth;
   {
@@ -655,89 +674,68 @@ void FlagcxWorkerPool::performPostSend(int tid) {
     curMaxDepth = maxWrDepth_;
   }
 
-  for (int s = tid; s < numShards_; s += numWorkers_) {
-    std::vector<PoolSubmitItem> local;
-    {
-      std::lock_guard<std::mutex> lk(slice_locks_[s]);
-      if (slice_queues_[s].empty())
-        continue;
-      local.swap(slice_queues_[s]);
-    }
-    if (local.empty())
+  size_t &cursor = workerQpCursor_[tid];
+  for (auto &entry : local) {
+    void *sc = entry.first;
+    auto &pending = entry.second;
+    if (pending.empty())
       continue;
 
+    std::vector<PoolQpEntry *> myQpOnComm;
+    myQpOnComm.reserve(myQpEntries.size());
+    for (PoolQpEntry *e : myQpEntries) {
+      if (e && e->qp != nullptr && e->sendComm == sc)
+        myQpOnComm.push_back(e);
+    }
+    if (myQpOnComm.empty()) {
+      WARN("NET/IB_P2P : pool[%d] worker %d owns no QP for Engine %p; "
+           "failing %zu slices",
+           ibDevN_, tid, sc, pending.size());
+      for (auto *sl : pending)
+        sl->markFailed();
+      processed_.fetch_add(pending.size(), std::memory_order_release);
+      pending.clear();
+      continue;
+    }
+
+    const size_t ringSz = myQpOnComm.size();
     size_t i = 0;
-    while (i < local.size()) {
-      size_t j = i + 1;
-      while (j < local.size() && local[j].sendComm == local[i].sendComm &&
-             local[j].slice->opcode == local[i].slice->opcode) {
-        j++;
-      }
-      void *sc = local[i].sendComm;
-      std::vector<PoolQpEntry *> myQpOnComm;
-      myQpOnComm.reserve(myQpEntries.size());
-      for (PoolQpEntry *e : myQpEntries) {
-        if (e && e->qp != nullptr && e->sendComm == sc)
-          myQpOnComm.push_back(e);
-      }
-      if (myQpOnComm.empty()) {
-        WARN("NET/IB_P2P : pool[%d] worker %d owns no QP for conn %p; "
-             "failing %zu slices",
-             ibDevN_, tid, sc, j - i);
-        for (size_t k = i; k < j; k++)
-          local[k].slice->markFailed();
-        processed_.fetch_add(j - i, std::memory_order_release);
-        i = j;
-        continue;
-      }
-
-      size_t &cursor = workerQpCursor_[tid];
-      const size_t ringSz = myQpOnComm.size();
-
-      while (i < j) {
-        const size_t take = std::min<size_t>(maxWrPerPost_, j - i);
-        PoolQpEntry *chosen = nullptr;
-        for (size_t k = 0; k < ringSz; k++) {
-          PoolQpEntry *e = myQpOnComm[(cursor + k) % ringSz];
-          int cur = e->wrDepth;
-          if (curMaxDepth == 0 || cur + (int)take <= curMaxDepth) {
-            chosen = e;
-            cursor = (cursor + k + 1) % ringSz;
-            break;
-          }
-        }
-
-        if (chosen == nullptr) {
-          {
-            std::lock_guard<std::mutex> lk(slice_locks_[s]);
-            for (size_t k = i; k < j; k++)
-              slice_queues_[s].push_back(local[k]);
-          }
-          i = j;
+    while (i < pending.size()) {
+      const size_t take = std::min<size_t>(maxWrPerPost_, pending.size() - i);
+      PoolQpEntry *chosen = nullptr;
+      for (size_t k = 0; k < ringSz; k++) {
+        PoolQpEntry *e = myQpOnComm[(cursor + k) % ringSz];
+        int cur = e->wrDepth;
+        if (curMaxDepth == 0 || cur + (int)take <= curMaxDepth) {
+          chosen = e;
+          cursor = (cursor + k + 1) % ringSz;
           break;
         }
-
-        volatile int *depthPtr = &chosen->wrDepth;
-        __sync_fetch_and_add(depthPtr, (int)take);
-
-        std::vector<FlagcxSlice *> chunk;
-        chunk.reserve(take);
-        for (size_t k = 0; k < take; k++) {
-          FlagcxSlice *sl = local[i + k].slice;
-          sl->qpDepth = depthPtr;
-          chunk.push_back(sl);
-        }
-
-        struct ibv_qp *qp = chosen->qp;
-        flagcxResult_t rc = flagcxP2pSliceBatch(sc, qp, (int)take,
-                                                chunk.data());
-
-        if (rc != flagcxSuccess) {
-          processed_.fetch_add(take, std::memory_order_release);
-        }
-        i += take;
       }
+
+      if (chosen == nullptr)
+        break; // all of this worker's QPs for the engine are full; retry later
+
+      volatile int *depthPtr = &chosen->wrDepth;
+      __sync_fetch_and_add(depthPtr, (int)take);
+
+      std::vector<FlagcxSlice *> chunk;
+      chunk.reserve(take);
+      for (size_t k = 0; k < take; k++) {
+        FlagcxSlice *sl = pending[i + k];
+        sl->qpDepth = depthPtr;
+        chunk.push_back(sl);
+      }
+
+      flagcxResult_t rc =
+          flagcxP2pSliceBatch(sc, chosen->qp, (int)take, chunk.data());
+      if (rc != flagcxSuccess)
+        processed_.fetch_add(take, std::memory_order_release);
+      i += take;
     }
+    // Drop the posted prefix; anything left stays for the next iteration.
+    if (i > 0)
+      pending.erase(pending.begin(), pending.begin() + i);
   }
 }
 
