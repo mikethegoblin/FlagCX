@@ -31,6 +31,11 @@ flagcxDevComm_t = ctypes.c_void_p
 flagcxDevMem_t = ctypes.c_void_p
 flagcxWindow_t = ctypes.c_void_p
 
+# P2P engine (one-sided RDMA / RPC control plane) types
+flagcxP2pEngine_t = ctypes.c_void_p
+flagcxP2pConn_t = ctypes.c_void_p
+flagcxP2pMr_t = ctypes.c_uint64
+
 # Window flags
 FLAGCX_WIN_DEFAULT = 0x00
 FLAGCX_WIN_COLL_SYMMETRIC = 0x01
@@ -402,6 +407,26 @@ class FLAGCXLibrary:
         Function("flagcxDevMemFreeDevicePtr", flagcxResult_t, [flagcxDevMem_t]),
     ]
 
+    p2p_engine_functions = [
+        Function("flagcxP2pRpcEngineCreate", flagcxP2pEngine_t, []),
+        Function("flagcxP2pRpcEngineDestroy", None, [flagcxP2pEngine_t]),
+        Function("flagcxP2pRpcGetPort", ctypes.c_int, [flagcxP2pEngine_t]),
+        Function("flagcxP2pRpcStartServer", ctypes.c_int, [flagcxP2pEngine_t]),
+        Function("flagcxP2pRpcRegister", ctypes.c_int, [
+            flagcxP2pEngine_t, ctypes.c_uint64, ctypes.c_uint64,
+            ctypes.POINTER(ctypes.c_uint64)
+        ]),
+        Function("flagcxP2pRpcGetConn", flagcxP2pConn_t, [
+            flagcxP2pEngine_t, ctypes.c_char_p
+        ]),
+        Function("flagcxP2pRpcBatchWriteSync", ctypes.c_int, [
+            flagcxP2pConn_t, ctypes.c_int,
+            ctypes.POINTER(ctypes.c_uint64),
+            ctypes.POINTER(ctypes.c_uint64),
+            ctypes.POINTER(ctypes.c_uint64),
+        ]),
+    ]
+
     # class attribute to store the mapping from the path to the library
     # to avoid loading the same library multiple times
     path_to_library_cache: Dict[str, Any] = {}
@@ -425,6 +450,15 @@ class FLAGCXLibrary:
             _funcs: Dict[str, Any] = {}
             for func in FLAGCXLibrary.exported_functions:
                 f = getattr(self.lib, func.name)
+                f.restype = func.restype
+                f.argtypes = func.argtypes
+                _funcs[func.name] = f
+            # Best-effort: P2P engine symbols may be absent in older libs.
+            for func in FLAGCXLibrary.p2p_engine_functions:
+                try:
+                    f = getattr(self.lib, func.name)
+                except AttributeError:
+                    continue
                 f.restype = func.restype
                 f.argtypes = func.argtypes
                 _funcs[func.name] = f
@@ -711,6 +745,65 @@ class FLAGCXLibrary:
 
     def flagcxDevMemFreeDevicePtr(self, dev_mem: flagcxDevMem_t) -> None:
         self.FLAGCX_CHECK(self._funcs["flagcxDevMemFreeDevicePtr"](dev_mem))
+
+    def flagcxP2pEngineCreate(self) -> flagcxP2pEngine_t:
+        if "flagcxP2pRpcEngineCreate" not in self._funcs:
+            raise RuntimeError(
+                "libflagcx.so lacks P2P engine symbols; rebuild FlagCX with "
+                "USE_IBUC=1 (or the IB-capable backend)."
+            )
+        engine = self._funcs["flagcxP2pRpcEngineCreate"]()
+        if not engine:
+            raise RuntimeError("flagcxP2pEngineCreate returned NULL")
+        return ctypes.c_void_p(engine)
+
+    def flagcxP2pEngineDestroy(self, engine: flagcxP2pEngine_t) -> None:
+        self._funcs["flagcxP2pRpcEngineDestroy"](engine)
+
+    def flagcxP2pGetRpcPort(self, engine: flagcxP2pEngine_t) -> int:
+        port = self._funcs["flagcxP2pRpcGetPort"](engine)
+        if port < 0:
+            raise RuntimeError("flagcxP2pGetRpcPort failed")
+        return int(port)
+
+    def flagcxP2pStartRpcServer(self, engine: flagcxP2pEngine_t) -> None:
+        if self._funcs["flagcxP2pRpcStartServer"](engine) != 0:
+            raise RuntimeError("flagcxP2pStartRpcServer failed")
+
+    def flagcxP2pRegister(self, engine: flagcxP2pEngine_t,
+                          addr: int, size: int) -> int:
+        mr_id = ctypes.c_uint64(0)
+        rc = self._funcs["flagcxP2pRpcRegister"](
+            engine, ctypes.c_uint64(addr), ctypes.c_uint64(size),
+            ctypes.byref(mr_id))
+        if rc != 0:
+            raise RuntimeError(
+                f"flagcxP2pRegister failed (addr={hex(addr)}, size={size})")
+        return mr_id.value
+
+    def flagcxP2pGetConn(self, engine: flagcxP2pEngine_t,
+                         session: str) -> flagcxP2pConn_t:
+        conn = self._funcs["flagcxP2pRpcGetConn"](
+            engine, session.encode("utf-8"))
+        if not conn:
+            raise RuntimeError(f"flagcxP2pGetConn failed for session {session}")
+        return ctypes.c_void_p(conn)
+
+    def flagcxP2pBatchWriteSync(self, conn: flagcxP2pConn_t,
+                                src_vas: list[int], dst_vas: list[int],
+                                sizes: list[int]) -> None:
+        count = len(sizes)
+        if count == 0:
+            return
+        if len(src_vas) != count or len(dst_vas) != count:
+            raise ValueError(
+                "flagcxP2pBatchWriteSync argument lengths do not match")
+        u64 = ctypes.c_uint64 * count
+        rc = self._funcs["flagcxP2pRpcBatchWriteSync"](
+            conn, ctypes.c_int(count),
+            u64(*src_vas), u64(*dst_vas), u64(*sizes))
+        if rc != 0:
+            raise RuntimeError("flagcxP2pBatchWriteSync failed")
 
     def adaptor_stream_create(self):
         new_stream = flagcxStream_t()
