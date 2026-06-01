@@ -220,6 +220,49 @@ void flagcxP2pEngineConnDestroy(FlagcxP2pConn *conn);
 bool flagcxP2pEngineConnIsLocal(FlagcxP2pConn *conn);
 
 /* ================================================================== */
+/*  RPC control-plane service (Mooncake-style)                         */
+/*                                                                    */
+/*  These build a thin control plane on top of the existing engine:   */
+/*  a getRpcPort accessor, an accept daemon, a per-session connection  */
+/*  cache, a remote-VA -> descriptor resolver, and a blocking write.   */
+/*  The handshake (connect/accept) already exchanges each peer's       */
+/*  registered-region table, so the initiator can address remote       */
+/*  buffers by absolute virtual address.                               */
+/* ================================================================== */
+
+/**
+ * Return the engine's RPC/handshake listening port. This is the same
+ * port advertised in flagcxP2pEngineGetMetadata's rdma_port field; a
+ * peer uses "host:rpc_port" as the session identifier when connecting.
+ * @param engine        The engine instance.
+ * @return              Listening port, or -1 on failure.
+ */
+int flagcxP2pEngineGetRpcPort(FlagcxP2pEngine *engine);
+
+/**
+ * Start the background accept daemon (RPC server). Each accepted
+ * connection completes the QP + desc-table handshake and is kept alive
+ * so initiators can RDMA into this engine's registered regions. The
+ * receiver side (e.g. Decode) calls this after registering its memory.
+ * Idempotent: a second call is a no-op.
+ * @param engine        The engine instance.
+ * @return              0 on success, non-zero on failure.
+ */
+int flagcxP2pEngineStartRpcServer(FlagcxP2pEngine *engine);
+
+/**
+ * Get (or lazily establish) a connection to a remote session string of
+ * the form "host:rpc_port". The first call connects and exchanges the
+ * desc table; subsequent calls return the cached connection. The engine
+ * owns the returned connection; do not destroy it directly.
+ * @param engine        The engine instance.
+ * @param session       Remote session string "host:port".
+ * @return              Connection handle, or NULL on failure.
+ */
+FlagcxP2pConn *flagcxP2pEngineGetConn(FlagcxP2pEngine *engine,
+                                      const char *session);
+
+/* ================================================================== */
 /*  Memory registration                                               */
 /* ================================================================== */
 
@@ -273,6 +316,21 @@ int flagcxP2pEnginePrepareDesc(FlagcxP2pEngine *engine, FlagcxP2pMr mr,
  */
 int flagcxP2pEngineUpdateDesc(FlagcxP2pRdmaDesc &desc, uint64_t remoteAddr,
                               uint32_t size);
+
+/**
+ * Resolve an RDMA descriptor for an absolute remote virtual address using
+ * the desc table exchanged at handshake. Finds the peer region that fully
+ * contains [remoteVa, remoteVa+size) and fills desc with that region's
+ * rkey. This is the FlagCX equivalent of Mooncake's "look up rkey by
+ * dst_ptr" step.
+ * @param conn          Connection handle (must carry a remote region table).
+ * @param remoteVa      Absolute remote virtual address.
+ * @param size          Transfer size in bytes.
+ * @param desc          [out] Resolved descriptor (addr + size + rkey).
+ * @return              0 on success, -1 if no region contains the range.
+ */
+int flagcxP2pEngineMakeDesc(FlagcxP2pConn *conn, uint64_t remoteVa,
+                            uint32_t size, FlagcxP2pRdmaDesc *desc);
 
 /* ================================================================== */
 /*  One-sided READ (RDMA GET)                                         */
@@ -355,6 +413,24 @@ int flagcxP2pEngineWriteVector(FlagcxP2pConn *conn,
                                std::vector<FlagcxP2pRdmaDesc> descs,
                                int numIovs, uint64_t *transferId,
                                std::vector<char *> ipcBufs = {});
+
+/**
+ * Blocking vectored write. Submits a WriteVector and polls completion via
+ * flagcxP2pEngineXferStatus until all slices finish. Aligns with
+ * Mooncake's batch_transfer_sync_write: on return the data has landed in
+ * the peer's memory, so no separate signal/counter is needed.
+ * @param conn          Connection handle.
+ * @param mrIds         Vector of local memory region handles.
+ * @param srcVec        Vector of local source addresses.
+ * @param sizeVec       Vector of transfer sizes.
+ * @param descs         Vector of remote RDMA descriptors (see MakeDesc).
+ * @return              0 on success, non-zero on failure.
+ */
+int flagcxP2pEngineWriteVectorSync(FlagcxP2pConn *conn,
+                                   std::vector<FlagcxP2pMr> mrIds,
+                                   std::vector<void *> srcVec,
+                                   std::vector<size_t> sizeVec,
+                                   std::vector<FlagcxP2pRdmaDesc> descs);
 
 /* ================================================================== */
 /*  Two-sided send / recv                                             */
@@ -479,32 +555,32 @@ int flagcxP2pEngineUpdateIpcInfo(char *ipcBuf, uintptr_t addr,
 
 struct FlagcxP2pGlobalConfig {
   /* Worker pool / QP topology */
-  int qpsPerConn = 4;        /* FLAGCX_P2P_QPS_PER_CONN          */
-  int workersPerPool = 4;    /* FLAGCX_P2P_WORKERS_PER_POOL      */
-  int shardCount = 8;        /* FLAGCX_P2P_SHARD_COUNT           */
+  int qpsPerConn = 4;     /* FLAGCX_P2P_QPS_PER_CONN          */
+  int workersPerPool = 4; /* FLAGCX_P2P_WORKERS_PER_POOL      */
+  int shardCount = 8;     /* FLAGCX_P2P_SHARD_COUNT           */
 
   /* CQ / WR / completion-queue depth */
-  size_t sharedCqDepth = 4096;  /* FLAGCX_P2P_CQ_DEPTH           */
-  size_t maxWrPerPost = 256;    /* FLAGCX_P2P_MAX_WR_PER_POST    */
-  size_t maxRequests = 256;     /* FLAGCX_P2P_MAX_REQUESTS       */
-  size_t batchPollSize = 64;    /* FLAGCX_P2P_BATCH_POLL_SIZE    */
+  size_t sharedCqDepth = 4096; /* FLAGCX_P2P_CQ_DEPTH           */
+  size_t maxWrPerPost = 256;   /* FLAGCX_P2P_MAX_WR_PER_POST    */
+  size_t maxRequests = 256;    /* FLAGCX_P2P_MAX_REQUESTS       */
+  size_t batchPollSize = 64;   /* FLAGCX_P2P_BATCH_POLL_SIZE    */
 
   /* Slice cut policy */
-  size_t sliceSize = 64 * 1024;     /* FLAGCX_P2P_SLICE_SIZE      */
-  size_t fragmentLimit = 4 * 1024;  /* FLAGCX_P2P_FRAGMENT_LIMIT  */
+  size_t sliceSize = 64 * 1024;    /* FLAGCX_P2P_SLICE_SIZE      */
+  size_t fragmentLimit = 4 * 1024; /* FLAGCX_P2P_FRAGMENT_LIMIT  */
 
   /* IB QP attributes — verbs-clean (plain int) so this header does
      not pull <infiniband/verbs.h>. */
-  size_t maxSge = 4;            /* FLAGCX_P2P_MAX_SGE             */
-  size_t maxInline = 64;        /* FLAGCX_P2P_MAX_INLINE          */
-  uint8_t ibPort = 1;           /* FLAGCX_P2P_IB_PORT             */
-  int gidIndex = -1;            /* FLAGCX_P2P_GID_INDEX (-1=auto) */
-  int mtuLength = 4096;         /* FLAGCX_P2P_MTU                 */
-  int ibTrafficClass = -1;      /* FLAGCX_P2P_IB_TC (-1=off)      */
-  int retryCnt = 7;             /* FLAGCX_P2P_RETRY_CNT           */
+  size_t maxSge = 4;       /* FLAGCX_P2P_MAX_SGE             */
+  size_t maxInline = 64;   /* FLAGCX_P2P_MAX_INLINE          */
+  uint8_t ibPort = 1;      /* FLAGCX_P2P_IB_PORT             */
+  int gidIndex = -1;       /* FLAGCX_P2P_GID_INDEX (-1=auto) */
+  int mtuLength = 4096;    /* FLAGCX_P2P_MTU                 */
+  int ibTrafficClass = -1; /* FLAGCX_P2P_IB_TC (-1=off)      */
+  int retryCnt = 7;        /* FLAGCX_P2P_RETRY_CNT           */
 
   /* Notification */
-  int notifMaxPeers = 64;       /* FLAGCX_P2P_NOTIF_MAX_PEERS     */
+  int notifMaxPeers = 64; /* FLAGCX_P2P_NOTIF_MAX_PEERS     */
 
   /* Misc */
   bool enableDestDeviceAffinity = false; /* FLAGCX_P2P_DEST_DEV_AFFINITY */
@@ -517,5 +593,33 @@ const FlagcxP2pGlobalConfig &flagcxP2pGlobalConfig();
 /* Logs the resolved config once. Implicitly invoked at first
    flagcxP2pGlobalConfig() call. */
 void flagcxP2pDumpGlobalConfig();
+
+/* ================================================================== */
+/*  C-ABI facade for ctypes                                           */
+/* ================================================================== */
+extern "C" {
+
+/* Create / destroy a P2P engine. Returns an opaque engine pointer. */
+void *flagcxP2pRpcEngineCreate(void);
+void flagcxP2pRpcEngineDestroy(void *engine);
+
+/* Engine RPC/handshake listening port; "host:port" is the session id. */
+int flagcxP2pRpcGetPort(void *engine);
+
+/* Start the background accept daemon (receiver side). */
+int flagcxP2pRpcStartServer(void *engine);
+
+/* Register a buffer for RDMA. Writes the MR handle to *mrIdOut. */
+int flagcxP2pRpcRegister(void *engine, uint64_t addr, uint64_t size,
+                         uint64_t *mrIdOut);
+
+/* Get (or lazily establish) a cached connection to "host:port". */
+void *flagcxP2pRpcGetConn(void *engine, const char *session);
+
+/* Blocking batched RDMA write addressed by absolute virtual addresses. */
+int flagcxP2pRpcBatchWriteSync(void *conn, int count, const uint64_t *srcVa,
+                               const uint64_t *dstVa, const uint64_t *sizes);
+
+} // extern "C"
 
 #endif /* FLAGCX_P2P_H_ */
