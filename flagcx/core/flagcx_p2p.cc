@@ -95,7 +95,7 @@ void loadGlobalConfig(FlagcxP2pGlobalConfig &c) {
                                      256, "P2P_MAX_REQUESTS");
   c.batchPollSize = clampParam<size_t>(flagcxParamP2pBatchPollSize(), 1, 256,
                                        64, "P2P_BATCH_POLL_SIZE");
-  c.sliceSize = clampParam<size_t>(flagcxParamP2pSliceSize(), 1024, 1u << 26,
+  c.sliceSize = clampParam<size_t>(flagcxParamP2pSliceSize(), 0, 1u << 26,
                                    65536, "P2P_SLICE_SIZE");
   c.fragmentLimit = clampParam<size_t>(flagcxParamP2pFragmentLimit(), 0,
                                        c.sliceSize, 4096, "P2P_FRAGMENT_LIMIT");
@@ -427,9 +427,7 @@ public:
   FlagcxWorkerPool(const FlagcxWorkerPool &) = delete;
   FlagcxWorkerPool &operator=(const FlagcxWorkerPool &) = delete;
 
-  struct ibv_cq *getSharedCq() const {
-    return shared_cq_;
-  }
+  struct ibv_cq *getSharedCq() const { return shared_cq_; }
   void registerQp(void *sendComm, struct ibv_qp *qp);
   void unregisterQp(struct ibv_qp *qp);
 
