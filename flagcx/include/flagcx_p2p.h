@@ -573,8 +573,9 @@ struct FlagcxP2pGlobalConfig {
   size_t batchPollSize = 64;   /* FLAGCX_P2P_BATCH_POLL_SIZE    */
 
   /* Slice cut policy */
-  size_t sliceSize = 64 * 1024;    /* FLAGCX_P2P_SLICE_SIZE      */
-  size_t fragmentLimit = 4 * 1024; /* FLAGCX_P2P_FRAGMENT_LIMIT  */
+  size_t sliceSize = 64 * 1024;       /* FLAGCX_P2P_SLICE_SIZE     */
+  size_t sliceSplitSize = 1ull << 30; /* FLAGCX_SLICE_SPLIT_SIZE   */
+  size_t fragmentLimit = 4 * 1024;    /* FLAGCX_P2P_FRAGMENT_LIMIT */
 
   /* IB QP attributes — verbs-clean (plain int) so this header does
      not pull <infiniband/verbs.h>. */
