@@ -780,16 +780,23 @@ void FlagcxWorkerPool::performPostSend(int tid) {
     const size_t ringSz = myQpOnComm.size();
     size_t i = 0;
     while (i < pending.size()) {
-      const size_t take = std::min<size_t>(maxWrPerPost_, pending.size() - i);
       PoolQpEntry *chosen = nullptr;
+      size_t take = 0;
       for (size_t k = 0; k < ringSz; k++) {
         PoolQpEntry *e = myQpOnComm[(cursor + k) % ringSz];
         int cur = e->wrDepth;
-        if (curMaxDepth == 0 || cur + (int)take <= curMaxDepth) {
-          chosen = e;
-          cursor = (cursor + k + 1) % ringSz;
-          break;
+        size_t room;
+        if (curMaxDepth == 0) {
+          room = pending.size() - i; // depth unknown: no gate
+        } else if (cur >= curMaxDepth) {
+          continue; // this QP is full, try the next one
+        } else {
+          room = (size_t)(curMaxDepth - cur);
         }
+        take = std::min<size_t>({room, maxWrPerPost_, pending.size() - i});
+        chosen = e;
+        cursor = (cursor + k + 1) % ringSz;
+        break;
       }
 
       if (chosen == nullptr)
