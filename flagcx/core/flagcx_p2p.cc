@@ -56,8 +56,7 @@ FLAGCX_PARAM(P2pCqDepth, "P2P_CQ_DEPTH", 4096);
 FLAGCX_PARAM(P2pMaxWrPerPost, "P2P_MAX_WR_PER_POST", 256);
 FLAGCX_PARAM(P2pMaxRequests, "P2P_MAX_REQUESTS", 256);
 FLAGCX_PARAM(P2pBatchPollSize, "P2P_BATCH_POLL_SIZE", 64);
-FLAGCX_PARAM(P2pSliceSize, "P2P_SLICE_SIZE", 65536);
-FLAGCX_PARAM(SliceSplitSize, "SLICE_SPLIT_SIZE", 1LL << 30);
+FLAGCX_PARAM(P2pSliceSize, "P2P_SLICE_SIZE", 1LL << 30);
 FLAGCX_PARAM(P2pFragmentLimit, "P2P_FRAGMENT_LIMIT", 4096);
 FLAGCX_PARAM(P2pMaxSge, "P2P_MAX_SGE", 4);
 FLAGCX_PARAM(P2pMaxInline, "P2P_MAX_INLINE", 64);
@@ -96,10 +95,8 @@ void loadGlobalConfig(FlagcxP2pGlobalConfig &c) {
                                      256, "P2P_MAX_REQUESTS");
   c.batchPollSize = clampParam<size_t>(flagcxParamP2pBatchPollSize(), 1, 256,
                                        64, "P2P_BATCH_POLL_SIZE");
-  c.sliceSize = clampParam<size_t>(flagcxParamP2pSliceSize(), 0, 1u << 26,
-                                   65536, "P2P_SLICE_SIZE");
-  c.sliceSplitSize = clampParam<size_t>(flagcxParamSliceSplitSize(), 0,
-                                        1u << 30, 1u << 30, "SLICE_SPLIT_SIZE");
+  c.sliceSize = clampParam<size_t>(flagcxParamP2pSliceSize(), 0, 1u << 30,
+                                   1u << 30, "P2P_SLICE_SIZE");
   c.fragmentLimit = clampParam<size_t>(flagcxParamP2pFragmentLimit(), 0,
                                        c.sliceSize, 4096, "P2P_FRAGMENT_LIMIT");
   c.maxSge =
@@ -149,8 +146,8 @@ void dumpGlobalConfigImpl(const FlagcxP2pGlobalConfig &c) {
   INFO(FLAGCX_INIT,
        "sharedCqDepth=%zu maxWrPerPost=%zu maxRequests=%zu batchPollSize=%zu",
        c.sharedCqDepth, c.maxWrPerPost, c.maxRequests, c.batchPollSize);
-  INFO(FLAGCX_INIT, "sliceSize=%zu sliceSplitSize=%zu fragmentLimit=%zu",
-       c.sliceSize, c.sliceSplitSize, c.fragmentLimit);
+  INFO(FLAGCX_INIT, "sliceSize=%zu fragmentLimit=%zu", c.sliceSize,
+       c.fragmentLimit);
   INFO(FLAGCX_INIT,
        "ibPort=%u gidIndex=%d mtu=%d tc=%d retry=%d "
        "maxSge=%zu maxInline=%zu",
@@ -343,9 +340,8 @@ inline void flagcxBuildSlicesRuntime(FlagcxTransferTask *task, uint64_t srcVa,
                                      uint32_t lkey, uint32_t rkey,
                                      uint8_t opcode,
                                      const std::string &peerNicPath,
-                                     size_t blockSize, size_t fragmentSize,
-                                     size_t splitSize) {
-  if (blockSize == 0 || totalLen <= splitSize) {
+                                     size_t blockSize, size_t fragmentSize) {
+  if (blockSize == 0 || totalLen <= blockSize) {
     auto *s = new FlagcxSlice{srcVa,       dstVa, (uint32_t)totalLen,
                               lkey,        rkey,  opcode,
                               peerNicPath, task,  nullptr};
@@ -934,10 +930,9 @@ buildAndSubmitToPool(PoolTransferTask *task, const std::vector<void *> &dataVec,
     uint64_t localVa = (uintptr_t)dataVec[i];
     uint64_t remoteVa = descs[i].addr;
     const auto &sliceCfg = flagcxP2pGlobalConfig();
-    flagcxBuildSlicesRuntime(&task->fx, localVa, remoteVa, sizeVec[i],
-                             localMr->lkey, descs[i].rkey, opcode,
-                             std::string(), sliceCfg.sliceSize,
-                             sliceCfg.fragmentLimit, sliceCfg.sliceSplitSize);
+    flagcxBuildSlicesRuntime(
+        &task->fx, localVa, remoteVa, sizeVec[i], localMr->lkey, descs[i].rkey,
+        opcode, std::string(), sliceCfg.sliceSize, sliceCfg.fragmentLimit);
   }
 
   if (task->fx.sliceList.empty()) {
