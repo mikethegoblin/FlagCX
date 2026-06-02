@@ -587,6 +587,17 @@ accept_cleanup:
 /*  One-sided transfers: iput / iget / iputSignal                      */
 /* ------------------------------------------------------------------ */
 
+// Slice request ownership model:
+//   Allocation:  iput/iget/igetBatch allocate a flagcxP2pSliceReq (and, for
+//                batch paths, additional FlagcxSlice objects).
+//   Submission:  The req's slices are submitted to the worker pool via
+//                flagcxP2pPoolSubmit(). The pool posts WRs and marks slices
+//                done (markSuccess/markFailed) when CQEs arrive.
+//   Polling:     The caller polls via test() or testBatch(). Once
+//                task.isAllDone() returns true, the request is complete.
+//   Deallocation: test()/testBatch() call flagcxP2pFreeSliceReq() which
+//                deletes any heap-allocated slices and the req itself.
+
 static flagcxResult_t
 flagcxP2pBuildSingleSliceReq(struct flagcxP2pSendComm *comm, uint64_t localVa,
                              uint64_t remoteVa, size_t size, uint32_t lkey,
@@ -817,13 +828,16 @@ static flagcxResult_t flagcxP2pTest(void *request, int *done, int *sizes) {
   auto *req = static_cast<struct flagcxP2pSliceReq *>(request);
   if (req->task.isAllDone()) {
     *done = 1;
-    if (sizes) {
+    bool failed = req->task.hasErrors();
+    if (sizes && !failed) {
       uint64_t total = 0;
       for (auto *s : req->task.sliceList)
         total += s->length;
       *sizes = (int)std::min<uint64_t>(total, (uint64_t)INT32_MAX);
     }
     flagcxP2pFreeSliceReq(req);
+    if (failed)
+      return flagcxInternalError;
   }
   return flagcxSuccess;
 }
@@ -831,6 +845,7 @@ static flagcxResult_t flagcxP2pTest(void *request, int *done, int *sizes) {
 static flagcxResult_t flagcxP2pTestBatch(void **requests, int nRequests,
                                          int *doneFlags, int *doneCount) {
   int completed = 0;
+  bool anyFailed = false;
   for (int i = 0; i < nRequests; i++) {
     doneFlags[i] = 0;
     auto *req = static_cast<struct flagcxP2pSliceReq *>(requests[i]);
@@ -842,11 +857,13 @@ static flagcxResult_t flagcxP2pTestBatch(void **requests, int nRequests,
     if (req->task.isAllDone()) {
       doneFlags[i] = 1;
       completed++;
+      if (req->task.hasErrors())
+        anyFailed = true;
       flagcxP2pFreeSliceReq(req);
     }
   }
   *doneCount = completed;
-  return flagcxSuccess;
+  return anyFailed ? flagcxInternalError : flagcxSuccess;
 }
 
 /* ------------------------------------------------------------------ */
