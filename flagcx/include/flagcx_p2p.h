@@ -98,12 +98,17 @@ inline void flagcxP2pDeserializeRdmaDesc(const char *buf,
 struct FlagcxTransferTask {
   std::atomic<uint64_t> sliceCount{0};
   std::atomic<uint64_t> doneSliceCount{0};
+  std::atomic<uint64_t> failedCount{0};
   std::vector<struct FlagcxSlice *> sliceList;
 
   bool isAllDone() const {
     auto total = sliceCount.load(std::memory_order_acquire);
     auto done = doneSliceCount.load(std::memory_order_acquire);
     return total > 0 && done >= total;
+  }
+
+  bool hasErrors() const {
+    return failedCount.load(std::memory_order_acquire) > 0;
   }
 };
 
@@ -116,14 +121,14 @@ struct FlagcxSlice {
   // WRITE: local source VA; READ: local destination VA.
   uint64_t srcVa = 0;
   // WRITE: remote destination VA; READ: remote source VA.
-  uint64_t dstVa;
-  uint32_t length;
-  uint32_t lkey;
-  uint32_t rkey;
-  uint8_t opcode;
+  uint64_t dstVa = 0;
+  uint32_t length = 0;
+  uint32_t lkey = 0;
+  uint32_t rkey = 0;
+  uint8_t opcode = FLAGCX_SLICE_OP_WRITE;
   std::string peerNicPath;
-  FlagcxTransferTask *task;
-  volatile int *qpDepth;
+  FlagcxTransferTask *task = nullptr;
+  volatile int *qpDepth = nullptr;
 
   inline void markSuccess() {
     if (task)
@@ -131,8 +136,10 @@ struct FlagcxSlice {
   }
 
   inline void markFailed() {
-    if (task)
+    if (task) {
+      task->failedCount.fetch_add(1, std::memory_order_release);
       task->doneSliceCount.fetch_add(1, std::memory_order_release);
+    }
   }
 };
 

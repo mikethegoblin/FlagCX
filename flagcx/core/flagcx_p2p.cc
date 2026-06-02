@@ -53,7 +53,7 @@ FLAGCX_PARAM(P2pQpsPerConn, "P2P_QPS_PER_CONN", 4);
 FLAGCX_PARAM(P2pWorkersPerPool, "P2P_WORKERS_PER_POOL", 4);
 FLAGCX_PARAM(P2pShardCount, "P2P_SHARD_COUNT", 8);
 FLAGCX_PARAM(P2pCqDepth, "P2P_CQ_DEPTH", 4096);
-FLAGCX_PARAM(P2pMaxWrPerPost, "P2P_MAX_WR_PER_POST", 64);
+FLAGCX_PARAM(P2pMaxWrPerPost, "P2P_MAX_WR_PER_POST", 256);
 FLAGCX_PARAM(P2pMaxRequests, "P2P_MAX_REQUESTS", 256);
 FLAGCX_PARAM(P2pBatchPollSize, "P2P_BATCH_POLL_SIZE", 64);
 FLAGCX_PARAM(P2pSliceSize, "P2P_SLICE_SIZE", 65536);
@@ -655,6 +655,15 @@ flagcxResult_t FlagcxWorkerPool::submitPostSend(void *sendComm,
                                                 int count) {
   if (count <= 0 || slices == nullptr)
     return flagcxSuccess;
+
+  // Backpressure: spin-yield until in-flight count drops below threshold.
+  // Prevents unbounded queue growth under sustained submission bursts.
+  const size_t maxPending = flagcxP2pGlobalConfig().maxRequests * 4;
+  while (submitted_.load(std::memory_order_acquire) -
+             processed_.load(std::memory_order_acquire) >
+         maxPending) {
+    std::this_thread::yield();
+  }
 
   std::vector<std::vector<FlagcxSlice *>> perShard(numShards_);
   int enqueued = 0;
@@ -2442,6 +2451,12 @@ bool flagcxP2pEngineXferStatus(FlagcxP2pConn *conn, uint64_t transferId) {
     if (it != gPoolXferMap.end()) {
       auto &task = it->second;
       if (task->fx.isAllDone()) {
+        if (task->fx.hasErrors()) {
+          WARN("NET/IB_P2P : transfer %lu completed with %lu failed slices",
+               (unsigned long)transferId,
+               (unsigned long)task->fx.failedCount.load(
+                   std::memory_order_relaxed));
+        }
         for (auto *s : task->fx.sliceList)
           delete s;
         task->fx.sliceList.clear();
