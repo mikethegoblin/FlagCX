@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 #include <memory>
+#include <thread>
 #include <vector>
 
 #include "flagcx_p2p.h"
