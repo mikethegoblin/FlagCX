@@ -25,6 +25,10 @@ struct PerfContext {
   uint64_t splitMask;
   int localRegister;
 
+  // Datatype/op for current iteration
+  flagcxDataType_t datatype;
+  flagcxRedOp_t op;
+
   // FlagCX handles
   flagcxDeviceHandle_t devHandle;
   flagcxComm_t comm;
@@ -78,15 +82,19 @@ void perfTeardown(PerfContext &ctx);
 void perfWarmup(PerfContext &ctx, PerfCollFn fn);
 
 // Run the benchmark size sweep with timing, MPI averaging, and
-// bandwidth reporting.
+// bandwidth reporting. Set iterateOps=false for collectives that don't
+// use ctx.op (e.g., allgather, broadcast, sendrecv).
 void perfBenchmarkLoop(PerfContext &ctx, PerfCollFn collFn,
                        PerfBwFactorFn bwFactorFn = nullptr,
                        PerfDataInitFn dataInitFn = nullptr,
-                       PerfPostIterFn postIterFn = nullptr);
+                       PerfPostIterFn postIterFn = nullptr,
+                       bool iterateOps = true);
 
 // Run the benchmark size sweep with root iteration (for reduce, broadcast,
 // scatter, gather). Iterates over roots per size, accumulating BW.
+// Set iterateOps=false for collectives that don't use ctx.op.
 void perfRootBenchmarkLoop(PerfContext &ctx, PerfRootCollFn collFn,
                            PerfBwFactorFn bwFactorFn = nullptr,
                            PerfRootDataInitFn dataInitFn = nullptr,
-                           PerfRootPostIterFn postIterFn = nullptr);
+                           PerfRootPostIterFn postIterFn = nullptr,
+                           bool iterateOps = true);
