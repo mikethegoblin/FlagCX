@@ -146,7 +146,8 @@ struct CommTraits<Default<PlatformTag>> {
 
     // IPC barriers
     uint64_t **barrierPeers;
-    uint64_t *epochBuffer; // Device pointer: [CTA_COUNT intra, CTA_COUNT inter]
+    uint64_t
+        *epochBuffer; // Device pointer: [intra live, inter live] × CTA_COUNT
     int nBarriers;
 
     // Inter-node signal relay
@@ -840,8 +841,10 @@ struct Barrier<Default<P>, flagcxTeamTagIntra, Coop> {
       }
     }
     _epoch += 1;
-    Atomic::store(&_epochBuffer[_ctaIndex], _epoch,
-                  flagcxDeviceMemoryOrderRelaxed);
+    if (_coop.threadRank() == 0) {
+      Atomic::store(&_epochBuffer[_ctaIndex], _epoch,
+                    flagcxDeviceMemoryOrderRelease);
+    }
     _coop.sync();
   }
 
@@ -895,7 +898,9 @@ struct Barrier<Default<P>, flagcxTeamTagInter, Coop> {
   arrive(flagcxDeviceMemoryOrder_t order = flagcxDeviceMemoryOrderAcqRel,
          flagcxDevNetFenceLevel fence = flagcxDevNetFenceLevel::Relaxed) {
     _epoch += _nInterPeers;
-    Atomic::store(_epochBuffer, _epoch, flagcxDeviceMemoryOrderRelaxed);
+    if (_coop.threadRank() == 0) {
+      Atomic::store(_epochBuffer, _epoch, flagcxDeviceMemoryOrderRelease);
+    }
     _coop.sync();
     if (_coop.threadRank() == 0 && _isLeader) {
       CommTraits<Default<P>>::fifoEnqueue(

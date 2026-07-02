@@ -813,5 +813,8 @@ flagcxDevNetGet(const void *transOpaque, const void *teamOpaque, int peer,
   trans->get(*team, peer, *src, srcOffset, *dst, dstOffset, bytes, *coop);
 }
 
+// Include scalar IR implementations (struct-free API for Triton/LLVM)
+#include "flagcx_device_scalar_ir_impl.h"
+
 #endif /* FLAGCX_CHECK_DEVICE_CC */
 #endif /* FLAGCX_DEVICE_WRAPPER_IMPL_H_ */

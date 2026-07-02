@@ -22,8 +22,21 @@
 #include "shmutils.h" // flagcxShmOpen, flagcxShmClose, flagcxShmUnlink
 #include "utils.h"    // flagcxParamSignalHostEnable
 #include <algorithm>  // std::min, std::max
-#include <new>
-#include <sched.h> // sched_yield
+#include <cstddef>    // offsetof
+#include <new>        // std::nothrow
+#include <sched.h>    // sched_yield
+
+// Host-visible helpers implemented in device_api_host_helpers.cu (compiled by
+// nvcc). Other vendors provide equivalent implementations.
+// When kernels are not compiled, provide stubs so the library links.
+#ifdef COMPILE_KERNEL_HOST
+extern "C" size_t flagcxDevNetSizeOf();
+extern "C" void flagcxDevNetLaunchConstruct(void *devNets, void *devComm,
+                                            int count, void *stream);
+#else
+static size_t flagcxDevNetSizeOf() { return 0; }
+static void flagcxDevNetLaunchConstruct(void *, void *, int, void *) {}
+#endif
 
 // ==========================================================================
 // Shared: IPC peer pointer exchange (used by both tiers)
@@ -772,7 +785,7 @@ flagcxDevCommCreate(flagcxComm_t comm, const flagcxDevCommRequirements *reqs,
     }
 
     // Allocate persistent epoch buffer (per-CTA intra + inter epochs).
-    // Layout: [intra epochs (CTA_COUNT)] [inter epochs (CTA_COUNT)]
+    // Layout: [intra live (CTA_COUNT)] [inter live (CTA_COUNT)]
     {
       size_t epochBufSize = 2 * FLAGCX_DEVICE_CTA_COUNT * sizeof(uint64_t);
       flagcxResult_t res = deviceAdaptor->deviceMalloc(
@@ -858,14 +871,16 @@ flagcxDevCommCreate(flagcxComm_t comm, const flagcxDevCommRequirements *reqs,
         }
         memset(handle->counterBuffer, 0, cntSize);
       }
-      // PutValue staging buffer (8 bytes host-pinned)
+      // PutValue staging buffer (nRanks * 8 bytes host-pinned, one slot per
+      // peer to avoid races between concurrent RDMA WRITEs)
+      size_t stagingSize = (size_t)comm->heteroComm->nRanks * sizeof(uint64_t);
       res = deviceAdaptor->deviceMalloc((void **)&handle->putValueStagingBuffer,
-                                        sizeof(uint64_t), flagcxMemHost, NULL);
+                                        stagingSize, flagcxMemHost, NULL);
       if (res != flagcxSuccess) {
         flagcxDevCommDestroy(comm, handle);
         return res;
       }
-      memset(handle->putValueStagingBuffer, 0, sizeof(uint64_t));
+      memset(handle->putValueStagingBuffer, 0, stagingSize);
 
       // Auto-register signal buffer for RDMA one-sided access
       if (handle->signalBuffer) {
@@ -888,7 +903,7 @@ flagcxDevCommCreate(flagcxComm_t comm, const flagcxDevCommRequirements *reqs,
       // Auto-register staging buffer for PutValue RDMA source
       if (handle->putValueStagingBuffer) {
         res = flagcxOneSideStagingRegister(comm, handle->putValueStagingBuffer,
-                                           sizeof(uint64_t));
+                                           stagingSize);
         if (res != flagcxSuccess) {
           WARN("flagcxDevCommCreate: staging buffer MR registration failed "
                "(%d), "
@@ -1056,6 +1071,9 @@ extern "C" flagcxResult_t flagcxDevCommDestroy(flagcxComm_t comm,
   }
 
   // Device pointer cache cleanup
+  if (devComm->cachedNetContextsPtr) {
+    flagcxCommDeferFree(comm, devComm->cachedNetContextsPtr, flagcxMemDevice);
+  }
   if (devComm->cachedDevicePtr) {
     flagcxCommDeferFree(comm, devComm->cachedDevicePtr, flagcxMemDevice);
   }
@@ -1265,11 +1283,14 @@ extern "C" flagcxResult_t flagcxDevCommGetDevicePtr(flagcxDevComm_t devComm,
     return flagcxSuccess;
   }
 
-  // Construct value struct on host stack
+  // Construct value struct on host stack (with _netContexts = nullptr;
+  // will be patched on device after kernel construction)
   flagcxDevComm hostCopy(*devComm);
+  hostCopy._netContexts = nullptr;
 
-  // Allocate device memory and copy
+  // Step 1: Copy flagcxDevComm to device
   void *dPtr = nullptr;
+  void *netDevPtr = nullptr;
   flagcxResult_t res = flagcxSuccess;
   FLAGCXCHECKGOTO(deviceAdaptor->deviceMalloc(&dPtr, sizeof(flagcxDevComm),
                                               flagcxMemDevice, NULL),
@@ -1279,13 +1300,45 @@ extern "C" flagcxResult_t flagcxDevCommGetDevicePtr(flagcxDevComm_t devComm,
                                   flagcxMemcpyHostToDevice, NULL, NULL),
       res, fail);
 
+  // Step 2: Allocate + construct net array on device, referencing
+  // the device-resident flagcxDevComm. Then patch _netContexts on device.
+  // Both the kernel launch and the subsequent memcpy use the default stream
+  // (nullptr), which guarantees sequential execution. If a vendor's
+  // deviceAdaptor->deviceMemcpy dispatches on a different stream, an explicit
+  // streamSynchronize would be needed between these two calls.
+  // When flagcxDevNetSizeOf() returns 0 (stub path or vendor without net
+  // support), _netContexts remains nullptr. The scalar API's
+  // flagcxDevNetGetFromCommS handles this gracefully by returning nullptr.
+  if (hostCopy._contextCount > 0 && flagcxDevNetSizeOf() > 0) {
+    size_t netArraySize = hostCopy._contextCount * flagcxDevNetSizeOf();
+    FLAGCXCHECKGOTO(deviceAdaptor->deviceMalloc(&netDevPtr, netArraySize,
+                                                flagcxMemDevice, NULL),
+                    res, fail);
+    // Launch kernel to construct flagcxDevNet[] referencing device-resident
+    // comm
+    flagcxDevNetLaunchConstruct(netDevPtr, dPtr, hostCopy._contextCount,
+                                nullptr);
+    // Patch _netContexts field on the device-resident flagcxDevComm
+    void *netCtxField = (char *)dPtr + offsetof(flagcxDevComm, _netContexts);
+    FLAGCXCHECKGOTO(
+        deviceAdaptor->deviceMemcpy(netCtxField, &netDevPtr, sizeof(void *),
+                                    flagcxMemcpyHostToDevice, NULL, NULL),
+        res, fail);
+    // Ensure net construction + pointer patch are visible to all streams
+    FLAGCXCHECKGOTO(deviceAdaptor->deviceSynchronize(), res, fail);
+  }
+
   devComm->cachedDevicePtr = dPtr;
+  devComm->cachedNetContextsPtr = netDevPtr;
   *devPtr = dPtr;
   pthread_mutex_unlock(&devComm->cachedPtrMutex);
   return flagcxSuccess;
 
 fail:
   pthread_mutex_unlock(&devComm->cachedPtrMutex);
+  if (netDevPtr) {
+    deviceAdaptor->deviceFree(netDevPtr, flagcxMemDevice, NULL);
+  }
   if (dPtr) {
     deviceAdaptor->deviceFree(dPtr, flagcxMemDevice, NULL);
   }
@@ -1298,9 +1351,14 @@ extern "C" flagcxResult_t flagcxDevCommFreeDevicePtr(flagcxDevComm_t devComm) {
 
   pthread_mutex_lock(&devComm->cachedPtrMutex);
   void *ptr = devComm->cachedDevicePtr;
+  void *netPtr = devComm->cachedNetContextsPtr;
   devComm->cachedDevicePtr = nullptr;
+  devComm->cachedNetContextsPtr = nullptr;
   pthread_mutex_unlock(&devComm->cachedPtrMutex);
 
+  if (netPtr) {
+    FLAGCXCHECK(deviceAdaptor->deviceFree(netPtr, flagcxMemDevice, NULL));
+  }
   if (ptr) {
     FLAGCXCHECK(deviceAdaptor->deviceFree(ptr, flagcxMemDevice, NULL));
   }
