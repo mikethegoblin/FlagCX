@@ -335,17 +335,60 @@ struct FlagcxP2pXfer {
   std::vector<void *> openedIpcPtrs;
 };
 
-static std::vector<FlagcxP2pNotifyMsg> gNotifyList;
-static std::mutex gNotifyMutex;
+static std::vector<FlagcxP2pNotifyMsg> &notifyList() {
+  static std::vector<FlagcxP2pNotifyMsg> list;
+  return list;
+}
 
-static std::unordered_map<uintptr_t, FlagcxP2pMemRegEntry> gMemRegInfo;
-static std::unordered_map<FlagcxP2pMr, uintptr_t> gMrToBaseAddr;
-static std::mutex gMemMutex;
-static uint64_t gNextMrId = 1;
+static std::mutex &notifyMutex() {
+  static std::mutex mu;
+  return mu;
+}
 
-static std::unordered_map<uint64_t, FlagcxP2pXfer> gXferMap;
-static std::mutex gXferMutex;
-static uint64_t gNextXferId = 1;
+static std::unordered_map<uintptr_t, FlagcxP2pMemRegEntry> &memRegInfo() {
+  static std::unordered_map<uintptr_t, FlagcxP2pMemRegEntry> info;
+  return info;
+}
+
+static std::unordered_map<FlagcxP2pMr, uintptr_t> &mrToBaseAddr() {
+  static std::unordered_map<FlagcxP2pMr, uintptr_t> map;
+  return map;
+}
+
+static std::mutex &memMutex() {
+  static std::mutex mu;
+  return mu;
+}
+
+static uint64_t &nextMrId() {
+  static uint64_t id = 1;
+  return id;
+}
+
+static std::unordered_map<uint64_t, FlagcxP2pXfer> &xferMap() {
+  static std::unordered_map<uint64_t, FlagcxP2pXfer> map;
+  return map;
+}
+
+static std::mutex &xferMutex() {
+  static std::mutex mu;
+  return mu;
+}
+
+static uint64_t &nextXferId() {
+  static uint64_t id = 1;
+  return id;
+}
+
+#define gNotifyList notifyList()
+#define gNotifyMutex notifyMutex()
+#define gMemRegInfo memRegInfo()
+#define gMrToBaseAddr mrToBaseAddr()
+#define gMemMutex memMutex()
+#define gNextMrId nextMrId()
+#define gXferMap xferMap()
+#define gXferMutex xferMutex()
+#define gNextXferId nextXferId()
 
 struct FlagcxSliceCache {
   static constexpr size_t kCap = 4096;
@@ -973,8 +1016,18 @@ void FlagcxWorkerPool::performPollCq() {
 
 // ---- Per-ibDev singleton plumbing -----------------------------------
 
-static std::unique_ptr<FlagcxWorkerPool> gPools[MAX_IB_DEVS];
-static std::mutex gPoolMu;
+static std::unique_ptr<FlagcxWorkerPool> *p2pPools() {
+  static std::unique_ptr<FlagcxWorkerPool> pools[MAX_IB_DEVS];
+  return pools;
+}
+
+static std::mutex &poolMutex() {
+  static std::mutex mu;
+  return mu;
+}
+
+#define gPools p2pPools()
+#define gPoolMu poolMutex()
 
 static FlagcxWorkerPool *getOrCreatePool(int ibDevN, struct ibv_context *ctx) {
   if (ibDevN < 0 || ibDevN >= MAX_IB_DEVS || ctx == NULL)
@@ -1105,8 +1158,18 @@ buildAndSubmitToPool(PoolTransferTask *task, const std::vector<void *> &dataVec,
 
 static constexpr uint64_t kPoolXferTag = 1ull << 63;
 
-static std::mutex gPoolTaskFreeMu;
-static PoolTransferTask *gPoolTaskFreeHead = nullptr;
+static std::mutex &poolTaskFreeMutex() {
+  static std::mutex mu;
+  return mu;
+}
+
+static PoolTransferTask *&poolTaskFreeHead() {
+  static PoolTransferTask *head = nullptr;
+  return head;
+}
+
+#define gPoolTaskFreeMu poolTaskFreeMutex()
+#define gPoolTaskFreeHead poolTaskFreeHead()
 
 static PoolTransferTask *acquirePoolTask() {
   {
