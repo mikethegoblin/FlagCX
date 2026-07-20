@@ -61,6 +61,7 @@ FLAGCX_PARAM(P2pCqDepth, "P2P_CQ_DEPTH", 4096);
 FLAGCX_PARAM(P2pMaxWrPerPost, "P2P_MAX_WR_PER_POST", 256);
 FLAGCX_PARAM(P2pMaxRequests, "P2P_MAX_REQUESTS", 256);
 FLAGCX_PARAM(P2pBatchPollSize, "P2P_BATCH_POLL_SIZE", 64);
+FLAGCX_PARAM(P2pWqesPerCqe, "P2P_WQES_PER_CQE", 32);
 FLAGCX_PARAM(P2pSliceSize, "P2P_SLICE_SIZE", 1LL << 30);
 FLAGCX_PARAM(P2pFragmentLimit, "P2P_FRAGMENT_LIMIT", 4096);
 FLAGCX_PARAM(P2pMaxSge, "P2P_MAX_SGE", 4);
@@ -100,6 +101,10 @@ void loadGlobalConfig(FlagcxP2pGlobalConfig &c) {
                                      256, "P2P_MAX_REQUESTS");
   c.batchPollSize = clampParam<size_t>(flagcxParamP2pBatchPollSize(), 1, 256,
                                        64, "P2P_BATCH_POLL_SIZE");
+  const size_t defaultWqesPerCqe = std::min<size_t>(32, c.maxWrPerPost);
+  c.wqesPerCqe =
+      clampParam<size_t>(flagcxParamP2pWqesPerCqe(), 1, c.maxWrPerPost,
+                         defaultWqesPerCqe, "P2P_WQES_PER_CQE");
   c.sliceSize = clampParam<size_t>(flagcxParamP2pSliceSize(), 0, 1u << 30,
                                    1u << 30, "P2P_SLICE_SIZE");
   c.fragmentLimit = clampParam<size_t>(flagcxParamP2pFragmentLimit(), 0,
@@ -149,8 +154,10 @@ void dumpGlobalConfigImpl(const FlagcxP2pGlobalConfig &c) {
   INFO(FLAGCX_INIT, "qpsPerConn=%d workersPerPool=%d shardCount=%d",
        c.qpsPerConn, c.workersPerPool, c.shardCount);
   INFO(FLAGCX_INIT,
-       "sharedCqDepth=%zu maxWrPerPost=%zu maxRequests=%zu batchPollSize=%zu",
-       c.sharedCqDepth, c.maxWrPerPost, c.maxRequests, c.batchPollSize);
+       "sharedCqDepth=%zu maxWrPerPost=%zu maxRequests=%zu batchPollSize=%zu "
+       "wqesPerCqe=%zu",
+       c.sharedCqDepth, c.maxWrPerPost, c.maxRequests, c.batchPollSize,
+       c.wqesPerCqe);
   INFO(FLAGCX_INIT, "sliceSize=%zu fragmentLimit=%zu", c.sliceSize,
        c.fragmentLimit);
   INFO(FLAGCX_INIT,
@@ -436,6 +443,12 @@ static inline FlagcxSlice *acquireSlice(uint64_t srcVa, uint64_t dstVa,
   s->opcode = opcode;
   s->task = task;
   s->qpDepth = nullptr;
+  s->completionNext = nullptr;
+  s->completionMarker = nullptr;
+  s->completionGroupHead = nullptr;
+  s->completionGroupSize = 0;
+  s->completionGroupFailed.store(false, std::memory_order_relaxed);
+  s->completionState = 0;
   return s;
 }
 
@@ -568,6 +581,7 @@ private:
   std::atomic<uint64_t> submitted_{0};
   std::atomic<uint64_t> processed_{0};
   std::atomic<int> suspended_flag_{0};
+  std::mutex cq_poll_mu_;
   std::condition_variable cv_;
   std::mutex cv_mu_;
 
@@ -977,6 +991,12 @@ void FlagcxWorkerPool::performPollCq() {
   if (shared_cq_ == nullptr)
     return;
 
+  // Preserve CQ processing order so a task cannot release grouped slices
+  // while another worker is still handling an earlier CQE for that group.
+  std::unique_lock<std::mutex> cqLock(cq_poll_mu_, std::try_to_lock);
+  if (!cqLock.owns_lock())
+    return;
+
   constexpr int kMaxPollBatch = 256;
   struct ibv_wc wcs[kMaxPollBatch];
   int batch = (int)std::min<size_t>(batchPollSize_, kMaxPollBatch);
@@ -997,16 +1017,51 @@ void FlagcxWorkerPool::performPollCq() {
 
     FlagcxSlice *slice =
         reinterpret_cast<FlagcxSlice *>(raw & ~(uintptr_t)1ull);
-    if (slice->qpDepth != NULL)
-      qpDepthSet[slice->qpDepth]++;
-    if (wcs[i].status != IBV_WC_SUCCESS) {
+    FlagcxSlice *marker =
+        slice->completionMarker != nullptr ? slice->completionMarker : slice;
+    const bool cqeFailed = wcs[i].status != IBV_WC_SUCCESS;
+
+    if (cqeFailed) {
       WARN("NET/IB_P2P : pool poll error status %d for slice %p", wcs[i].status,
            slice);
-      slice->markFailed();
-    } else {
-      slice->markSuccess();
+      marker->completionGroupFailed.store(true, std::memory_order_release);
     }
-    sliceProgressed++;
+
+    // Successful unsignaled WQEs do not produce CQEs. An error CQE can be
+    // produced for one, however, so retire that slice now and let the marker
+    // skip it later via completionState.
+    if (slice != marker) {
+      volatile int *depth = slice->qpDepth;
+      if (cqeFailed && slice->markFailed()) {
+        if (depth != NULL)
+          qpDepthSet[depth]++;
+        sliceProgressed++;
+      }
+      continue;
+    }
+
+    const bool groupFailed = cqeFailed || marker->completionGroupFailed.load(
+                                              std::memory_order_acquire);
+    FlagcxSlice *member = marker->completionGroupHead != nullptr
+                              ? marker->completionGroupHead
+                              : marker;
+    uint32_t membersRemaining =
+        marker->completionGroupSize != 0 ? marker->completionGroupSize : 1;
+    while (member != nullptr && membersRemaining-- > 0) {
+      FlagcxSlice *next = member->completionNext;
+      volatile int *depth = member->qpDepth;
+      const bool isMarker = member == marker;
+      const bool completed =
+          groupFailed ? member->markFailed() : member->markSuccess();
+      if (completed) {
+        if (depth != NULL)
+          qpDepthSet[depth]++;
+        sliceProgressed++;
+      }
+      if (isMarker)
+        break;
+      member = next;
+    }
   }
   for (auto &entry : qpDepthSet)
     __sync_fetch_and_sub(entry.first, entry.second);
@@ -2590,12 +2645,12 @@ int flagcxP2pEngineRead(FlagcxP2pConn *conn, FlagcxP2pMr mr, const void *data,
 }
 
 int flagcxP2pEngineReadVector(FlagcxP2pConn *conn,
-                              std::vector<FlagcxP2pMr> mrIds,
-                              std::vector<void *> dstVec,
-                              std::vector<size_t> sizeVec,
-                              std::vector<FlagcxP2pRdmaDesc> descs, int numIovs,
-                              uint64_t *transferId,
-                              std::vector<char *> ipcBufs) {
+                              const std::vector<FlagcxP2pMr> &mrIds,
+                              const std::vector<void *> &dstVec,
+                              const std::vector<size_t> &sizeVec,
+                              const std::vector<FlagcxP2pRdmaDesc> &descs,
+                              int numIovs, uint64_t *transferId,
+                              const std::vector<char *> &ipcBufs) {
   if (conn == NULL || numIovs <= 0 || transferId == NULL) {
     fprintf(stderr,
             "[FlagCX P2P] ReadVector early exit: invalid args (conn=%p, "

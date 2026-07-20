@@ -127,17 +127,31 @@ struct FlagcxSlice {
   uint8_t opcode = FLAGCX_SLICE_OP_WRITE;
   FlagcxTransferTask *task = nullptr;
   volatile int *qpDepth = nullptr;
+  FlagcxSlice *completionNext = nullptr;
+  FlagcxSlice *completionMarker = nullptr;
+  FlagcxSlice *completionGroupHead = nullptr;
+  uint32_t completionGroupSize = 0;
+  std::atomic<bool> completionGroupFailed{false};
+  uint8_t completionState = 0;
 
-  inline void markSuccess() {
+  inline bool markSuccess() {
+    if (completionState != 0)
+      return false;
+    completionState = 1;
     if (task)
       task->doneSliceCount.fetch_add(1, std::memory_order_release);
+    return true;
   }
 
-  inline void markFailed() {
+  inline bool markFailed() {
+    if (completionState != 0)
+      return false;
+    completionState = 1;
     if (task) {
       task->failedCount.fetch_add(1, std::memory_order_release);
       task->doneSliceCount.fetch_add(1, std::memory_order_release);
     }
+    return true;
   }
 };
 
@@ -371,12 +385,12 @@ int flagcxP2pEngineRead(FlagcxP2pConn *conn, FlagcxP2pMr mr, const void *data,
  * @return              0 on success, non-zero on failure.
  */
 int flagcxP2pEngineReadVector(FlagcxP2pConn *conn,
-                              std::vector<FlagcxP2pMr> mrIds,
-                              std::vector<void *> dstVec,
-                              std::vector<size_t> sizeVec,
-                              std::vector<FlagcxP2pRdmaDesc> descs, int numIovs,
-                              uint64_t *transferId,
-                              std::vector<char *> ipcBufs = {});
+                              const std::vector<FlagcxP2pMr> &mrIds,
+                              const std::vector<void *> &dstVec,
+                              const std::vector<size_t> &sizeVec,
+                              const std::vector<FlagcxP2pRdmaDesc> &descs,
+                              int numIovs, uint64_t *transferId,
+                              const std::vector<char *> &ipcBufs = {});
 
 /* ================================================================== */
 /*  One-sided WRITE (RDMA PUT)                                        */
@@ -569,6 +583,7 @@ struct FlagcxP2pGlobalConfig {
   size_t maxWrPerPost = 256;   /* FLAGCX_P2P_MAX_WR_PER_POST    */
   size_t maxRequests = 256;    /* FLAGCX_P2P_MAX_REQUESTS       */
   size_t batchPollSize = 64;   /* FLAGCX_P2P_BATCH_POLL_SIZE    */
+  size_t wqesPerCqe = 32;      /* FLAGCX_P2P_WQES_PER_CQE       */
 
   /* Slice cut policy */
   size_t sliceSize = 1ull << 30;   /* FLAGCX_P2P_SLICE_SIZE      */

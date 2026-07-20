@@ -66,6 +66,12 @@ TEST(SliceTest, SliceDefaultInitialization) {
   EXPECT_EQ(slice.opcode, FLAGCX_SLICE_OP_WRITE);
   EXPECT_EQ(slice.task, nullptr);
   EXPECT_EQ(slice.qpDepth, nullptr);
+  EXPECT_EQ(slice.completionNext, nullptr);
+  EXPECT_EQ(slice.completionMarker, nullptr);
+  EXPECT_EQ(slice.completionGroupHead, nullptr);
+  EXPECT_EQ(slice.completionGroupSize, 0);
+  EXPECT_FALSE(slice.completionGroupFailed.load());
+  EXPECT_EQ(slice.completionState, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -108,6 +114,18 @@ TEST(SliceTest, MarkFailedWithNullTaskIsSafe) {
   slice.task = nullptr;
   // Should not crash
   slice.markFailed();
+}
+
+TEST(SliceTest, CompletionIsRecordedOnlyOnce) {
+  FlagcxTransferTask task;
+  FlagcxSlice slice;
+  slice.task = &task;
+
+  EXPECT_TRUE(slice.markSuccess());
+  EXPECT_FALSE(slice.markSuccess());
+  EXPECT_FALSE(slice.markFailed());
+  EXPECT_EQ(task.doneSliceCount.load(), 1);
+  EXPECT_EQ(task.failedCount.load(), 0);
 }
 
 // ---------------------------------------------------------------------------

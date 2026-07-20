@@ -784,32 +784,55 @@ extern "C" flagcxResult_t flagcxP2pSliceBatch(void *sendComm, struct ibv_qp *qp,
   memset(wrs, 0, sizeof(*wrs) * count);
 
   for (int i = 0; i < count; i++) {
-    FlagcxSlice *s = slices[i];
-    if (s == NULL) {
-      WARN("NET/IB_P2P : sliceBatch slice[%d] is NULL", i);
-      for (int k = 0; k < i; k++) {
+    if (slices[i] != NULL)
+      continue;
+    WARN("NET/IB_P2P : sliceBatch slice[%d] is NULL", i);
+    for (int k = 0; k < count; k++) {
+      if (slices[k] != NULL) {
         if (slices[k]->qpDepth != NULL)
           __sync_fetch_and_sub(slices[k]->qpDepth, 1);
         slices[k]->markFailed();
       }
-      for (int k = i; k < count; k++) {
-        if (slices[k]) {
-          if (slices[k]->qpDepth != NULL)
-            __sync_fetch_and_sub(slices[k]->qpDepth, 1);
-          slices[k]->markFailed();
-        }
-      }
-      if (failedCount != NULL)
-        *failedCount = count;
-      return flagcxInternalError;
     }
+    if (failedCount != NULL)
+      *failedCount = count;
+    return flagcxInternalError;
+  }
 
+  const int wqesPerCqe = (int)flagcxP2pGlobalConfig().wqesPerCqe;
+  // The final WQE in every bounded group is signaled. Keeping groups within a
+  // transfer task also keeps the marker alive until all members are retired.
+  for (int groupStart = 0; groupStart < count;) {
+    int groupEnd = groupStart + 1;
+    while (groupEnd < count && groupEnd - groupStart < wqesPerCqe &&
+           slices[groupEnd]->task == slices[groupStart]->task) {
+      groupEnd++;
+    }
+    FlagcxSlice *marker = slices[groupEnd - 1];
+    marker->completionGroupHead = slices[groupStart];
+    marker->completionGroupSize = (uint32_t)(groupEnd - groupStart);
+    marker->completionGroupFailed.store(false, std::memory_order_relaxed);
+    for (int i = groupStart; i < groupEnd; i++) {
+      slices[i]->completionNext = i + 1 < groupEnd ? slices[i + 1] : nullptr;
+      slices[i]->completionMarker = marker;
+      slices[i]->completionGroupHead =
+          slices[i] == marker ? slices[groupStart] : nullptr;
+      slices[i]->completionGroupSize =
+          slices[i] == marker ? (uint32_t)(groupEnd - groupStart) : 0;
+      slices[i]->completionGroupFailed.store(false, std::memory_order_relaxed);
+      slices[i]->completionState = 0;
+    }
+    groupStart = groupEnd;
+  }
+
+  for (int i = 0; i < count; i++) {
+    FlagcxSlice *s = slices[i];
     sges[i].addr = s->srcVa;
     sges[i].length = s->length;
     sges[i].lkey = s->lkey;
 
     wrs[i].opcode = flagcxSliceOpcodeToVerbs(s->opcode);
-    wrs[i].send_flags = IBV_SEND_SIGNALED;
+    wrs[i].send_flags = s == s->completionMarker ? IBV_SEND_SIGNALED : 0;
     wrs[i].wr_id = ((uintptr_t)s) | 1ull;
     wrs[i].wr.rdma.remote_addr = s->dstVa;
     wrs[i].wr.rdma.rkey = s->rkey;
@@ -826,6 +849,19 @@ extern "C" flagcxResult_t flagcxP2pSliceBatch(void *sendComm, struct ibv_qp *qp,
       ptrdiff_t off = bad_wr - wrs;
       if (off >= 0 && off < count)
         failedFrom = (int)off;
+    }
+    const bool hasAcceptedUnsignaledPrefix =
+        failedFrom > 0 &&
+        slices[failedFrom - 1]->completionMarker != slices[failedFrom - 1];
+    if (hasAcceptedUnsignaledPrefix) {
+      struct ibv_qp_attr attr;
+      memset(&attr, 0, sizeof(attr));
+      attr.qp_state = IBV_QPS_ERR;
+      if (flagcxWrapIbvModifyQp(qp, &attr, IBV_QP_STATE) != flagcxSuccess) {
+        WARN("NET/IB_P2P : failed to move QP %u to ERR after partial "
+             "sliceBatch post",
+             qp->qp_num);
+      }
     }
     // Slices in [failedFrom..count) never went on the wire — roll back
     // their share of the pool's qpDepth pre-bump so the gate doesn't leak.
