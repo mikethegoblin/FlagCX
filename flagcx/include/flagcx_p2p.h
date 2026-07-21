@@ -133,6 +133,7 @@ struct FlagcxSlice {
   uint32_t completionGroupSize = 0;
   std::atomic<bool> completionGroupFailed{false};
   uint8_t completionState = 0;
+  uint64_t profileEnqueueNs = 0;
 
   inline bool markSuccess() {
     if (completionState != 0)
@@ -604,6 +605,8 @@ struct FlagcxP2pGlobalConfig {
 
   /* Misc */
   bool enableDestDeviceAffinity = false; /* FLAGCX_P2P_DEST_DEV_AFFINITY */
+  bool enableProfile = false;            /* FLAGCX_P2P_PROFILE           */
+  uint64_t profileIntervalMs = 1000;     /* FLAGCX_P2P_PROFILE_INTERVAL_MS */
 };
 
 /* Returns the lazy-loaded singleton (mooncake::globalConfig() shape).

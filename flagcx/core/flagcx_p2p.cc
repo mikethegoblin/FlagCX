@@ -73,6 +73,8 @@ FLAGCX_PARAM(P2pIbTc, "P2P_IB_TC", -1);
 FLAGCX_PARAM(P2pRetryCnt, "P2P_RETRY_CNT", 7);
 FLAGCX_PARAM(P2pNotifMaxPeers, "P2P_NOTIF_MAX_PEERS", 64);
 FLAGCX_PARAM(P2pDestDevAffinity, "P2P_DEST_DEV_AFFINITY", 0);
+FLAGCX_PARAM(P2pProfile, "P2P_PROFILE", 0);
+FLAGCX_PARAM(P2pProfileIntervalMs, "P2P_PROFILE_INTERVAL_MS", 1000);
 
 template <typename T>
 inline T clampParam(int64_t v, T lo, T hi, T deft, const char *name) {
@@ -135,6 +137,10 @@ void loadGlobalConfig(FlagcxP2pGlobalConfig &c) {
   c.notifMaxPeers = clampParam<int>(flagcxParamP2pNotifMaxPeers(), 1, 1024, 64,
                                     "P2P_NOTIF_MAX_PEERS");
   c.enableDestDeviceAffinity = (flagcxParamP2pDestDevAffinity() != 0);
+  c.enableProfile = (flagcxParamP2pProfile() != 0);
+  c.profileIntervalMs =
+      clampParam<uint64_t>(flagcxParamP2pProfileIntervalMs(), 100, 60000, 1000,
+                           "P2P_PROFILE_INTERVAL_MS");
 }
 
 void dumpGlobalConfigImpl(const FlagcxP2pGlobalConfig &c);
@@ -165,8 +171,10 @@ void dumpGlobalConfigImpl(const FlagcxP2pGlobalConfig &c) {
        "maxSge=%zu maxInline=%zu",
        (unsigned)c.ibPort, c.gidIndex, c.mtuLength, c.ibTrafficClass,
        c.retryCnt, c.maxSge, c.maxInline);
-  INFO(FLAGCX_INIT, "notifMaxPeers=%d destDevAffinity=%d", c.notifMaxPeers,
-       (int)c.enableDestDeviceAffinity);
+  INFO(FLAGCX_INIT,
+       "notifMaxPeers=%d destDevAffinity=%d profile=%d profileIntervalMs=%llu",
+       c.notifMaxPeers, (int)c.enableDestDeviceAffinity, (int)c.enableProfile,
+       (unsigned long long)c.profileIntervalMs);
 }
 
 } // namespace
@@ -449,6 +457,7 @@ static inline FlagcxSlice *acquireSlice(uint64_t srcVa, uint64_t dstVa,
   s->completionGroupSize = 0;
   s->completionGroupFailed.store(false, std::memory_order_relaxed);
   s->completionState = 0;
+  s->profileEnqueueNs = 0;
   return s;
 }
 
@@ -544,6 +553,7 @@ private:
   void performPostSend(int tid);
   void performPollCq();
   void notifWorkerLoop();
+  void maybeLogProfile(uint64_t now);
 
   void pinToNicCpus(const char *role, int id);
   static uint64_t nowNs() {
@@ -551,6 +561,12 @@ private:
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
                clk::now().time_since_epoch())
         .count();
+  }
+  static void updateMax(std::atomic<uint64_t> &target, uint64_t value) {
+    uint64_t current = target.load(std::memory_order_relaxed);
+    while (current < value && !target.compare_exchange_weak(
+                                  current, value, std::memory_order_relaxed)) {
+    }
   }
 
   int ibDevN_;
@@ -563,6 +579,9 @@ private:
   size_t maxWrPerPost_;
   size_t batchPollSize_;
   int maxWrDepth_ = 0;
+  bool profileEnabled_ = false;
+  uint64_t profileIntervalNs_ = 0;
+  uint64_t profileLastLogNs_ = 0;
 
   std::mutex qp_mu_;
   std::vector<std::unique_ptr<PoolQpEntry>> qpEntries_;
@@ -581,6 +600,29 @@ private:
   std::atomic<uint64_t> submitted_{0};
   std::atomic<uint64_t> processed_{0};
   std::atomic<int> suspended_flag_{0};
+
+  std::atomic<uint64_t> profileSubmitCalls_{0};
+  std::atomic<uint64_t> profileSubmitWqes_{0};
+  std::atomic<uint64_t> profileSubmitBytes_{0};
+  std::atomic<uint64_t> profilePostCalls_{0};
+  std::atomic<uint64_t> profilePostWqes_{0};
+  std::atomic<uint64_t> profileSignaledWqes_{0};
+  std::atomic<uint64_t> profileMaxGroupSize_{0};
+  std::atomic<uint64_t> profilePollAttempts_{0};
+  std::atomic<uint64_t> profilePollLockMisses_{0};
+  std::atomic<uint64_t> profilePollCalls_{0};
+  std::atomic<uint64_t> profileEmptyPolls_{0};
+  std::atomic<uint64_t> profileFullPolls_{0};
+  std::atomic<uint64_t> profileCqes_{0};
+  std::atomic<uint64_t> profileSliceCqes_{0};
+  std::atomic<uint64_t> profileErrorCqes_{0};
+  std::atomic<uint64_t> profileQpFull_{0};
+  std::atomic<uint64_t> profileBackpressureYields_{0};
+  std::atomic<uint64_t> profileQueueLatencyNs_{0};
+  std::atomic<uint64_t> profileQueueLatencySamples_{0};
+  std::atomic<uint64_t> profileMaxQueueLatencyNs_{0};
+  std::atomic<uint64_t> profileCompletedBytes_{0};
+
   std::mutex cq_poll_mu_;
   std::condition_variable cv_;
   std::mutex cv_mu_;
@@ -633,6 +675,9 @@ FlagcxWorkerPool::FlagcxWorkerPool(int ibDevN, struct ibv_context *ctx)
   numShards_ = C.shardCount;
   maxWrPerPost_ = C.maxWrPerPost;
   batchPollSize_ = C.batchPollSize;
+  profileEnabled_ = C.enableProfile;
+  profileIntervalNs_ = C.profileIntervalMs * 1000ull * 1000ull;
+  profileLastLogNs_ = nowNs();
 
   if (numWorkers_ > 0 && C.qpsPerConn % numWorkers_ != 0) {
     WARN("NET/IB_P2P : pool[%d] qpsPerEngine=%d not divisible by "
@@ -821,10 +866,26 @@ flagcxResult_t FlagcxWorkerPool::submitPostSend(void *sendComm,
   // Backpressure: spin-yield until in-flight count drops below threshold.
   // Prevents unbounded queue growth under sustained submission bursts.
   const size_t maxPending = flagcxP2pGlobalConfig().maxRequests * 4;
+  uint64_t backpressureYields = 0;
   while (submitted_.load(std::memory_order_acquire) -
              processed_.load(std::memory_order_acquire) >
          maxPending) {
+    backpressureYields++;
     std::this_thread::yield();
+  }
+
+  if (profileEnabled_) {
+    const uint64_t enqueueNs = nowNs();
+    uint64_t bytes = 0;
+    for (int i = 0; i < count; i++) {
+      slices[i]->profileEnqueueNs = enqueueNs;
+      bytes += slices[i]->length;
+    }
+    profileSubmitCalls_.fetch_add(1, std::memory_order_relaxed);
+    profileSubmitWqes_.fetch_add(count, std::memory_order_relaxed);
+    profileSubmitBytes_.fetch_add(bytes, std::memory_order_relaxed);
+    profileBackpressureYields_.fetch_add(backpressureYields,
+                                         std::memory_order_relaxed);
   }
 
   const int fanout = std::min(numShards_, count);
@@ -856,12 +917,89 @@ flagcxResult_t FlagcxWorkerPool::submitPostSend(void *sendComm,
   return flagcxSuccess;
 }
 
+void FlagcxWorkerPool::maybeLogProfile(uint64_t now) {
+  if (!profileEnabled_ || now - profileLastLogNs_ < profileIntervalNs_)
+    return;
+
+  const uint64_t elapsedNs = now - profileLastLogNs_;
+  profileLastLogNs_ = now;
+  auto take = [](std::atomic<uint64_t> &counter) {
+    return counter.exchange(0, std::memory_order_relaxed);
+  };
+
+  const uint64_t submitCalls = take(profileSubmitCalls_);
+  const uint64_t submitWqes = take(profileSubmitWqes_);
+  const uint64_t submitBytes = take(profileSubmitBytes_);
+  const uint64_t postCalls = take(profilePostCalls_);
+  const uint64_t postWqes = take(profilePostWqes_);
+  const uint64_t signaledWqes = take(profileSignaledWqes_);
+  const uint64_t maxGroupSize = take(profileMaxGroupSize_);
+  const uint64_t pollAttempts = take(profilePollAttempts_);
+  const uint64_t pollLockMisses = take(profilePollLockMisses_);
+  const uint64_t pollCalls = take(profilePollCalls_);
+  const uint64_t emptyPolls = take(profileEmptyPolls_);
+  const uint64_t fullPolls = take(profileFullPolls_);
+  const uint64_t cqes = take(profileCqes_);
+  const uint64_t sliceCqes = take(profileSliceCqes_);
+  const uint64_t errorCqes = take(profileErrorCqes_);
+  const uint64_t qpFull = take(profileQpFull_);
+  const uint64_t backpressureYields = take(profileBackpressureYields_);
+  const uint64_t queueLatencyNs = take(profileQueueLatencyNs_);
+  const uint64_t queueLatencySamples = take(profileQueueLatencySamples_);
+  const uint64_t maxQueueLatencyNs = take(profileMaxQueueLatencyNs_);
+  const uint64_t completedBytes = take(profileCompletedBytes_);
+
+  if (submitCalls == 0 && postCalls == 0 && cqes == 0)
+    return;
+
+  const double averagePost =
+      postCalls != 0 ? (double)postWqes / (double)postCalls : 0.0;
+  const double averageGroup =
+      signaledWqes != 0 ? (double)postWqes / (double)signaledWqes : 0.0;
+  const double averageQueueUs =
+      queueLatencySamples != 0
+          ? (double)queueLatencyNs / (double)queueLatencySamples / 1000.0
+          : 0.0;
+  const double goodputGbps =
+      elapsedNs != 0 ? (double)completedBytes * 8.0 / (double)elapsedNs : 0.0;
+  const uint64_t outstanding = submitted_.load(std::memory_order_relaxed) -
+                               processed_.load(std::memory_order_relaxed);
+
+  fprintf(
+      stdout,
+      "P2P/PROFILE dev=%d interval_ms=%.1f submit_calls=%llu "
+      "submit_wqes=%llu submit_bytes=%llu post_calls=%llu post_wqes=%llu "
+      "avg_post=%.2f signaled_wqes=%llu avg_group=%.2f max_group=%llu "
+      "cqes=%llu slice_cqes=%llu error_cqes=%llu poll_attempts=%llu "
+      "poll_calls=%llu poll_lock_misses=%llu empty_polls=%llu "
+      "full_polls=%llu qp_full=%llu backpressure_yields=%llu "
+      "queue_us_avg=%.2f queue_us_max=%.2f completed_bytes=%llu "
+      "goodput_gbps=%.3f outstanding=%llu\n",
+      ibDevN_, (double)elapsedNs / 1000000.0, (unsigned long long)submitCalls,
+      (unsigned long long)submitWqes, (unsigned long long)submitBytes,
+      (unsigned long long)postCalls, (unsigned long long)postWqes, averagePost,
+      (unsigned long long)signaledWqes, averageGroup,
+      (unsigned long long)maxGroupSize, (unsigned long long)cqes,
+      (unsigned long long)sliceCqes, (unsigned long long)errorCqes,
+      (unsigned long long)pollAttempts, (unsigned long long)pollCalls,
+      (unsigned long long)pollLockMisses, (unsigned long long)emptyPolls,
+      (unsigned long long)fullPolls, (unsigned long long)qpFull,
+      (unsigned long long)backpressureYields, averageQueueUs,
+      (double)maxQueueLatencyNs / 1000.0, (unsigned long long)completedBytes,
+      goodputGbps, (unsigned long long)outstanding);
+  fflush(stdout);
+}
+
 void FlagcxWorkerPool::transferWorkerLoop(int tid) {
   pinToNicCpus("transferWorker", tid);
   const static uint64_t kWaitPeriodInNano = 100ull * 1000 * 1000; // 100ms
   uint64_t last_wait_ts = nowNs();
+  uint32_t profileTicks = 0;
 
   while (running_.load(std::memory_order_relaxed)) {
+    if (profileEnabled_ && tid == 0 && (++profileTicks & 0xFFFu) == 0)
+      maybeLogProfile(nowNs());
+
     auto processed_slice_count = processed_.load(std::memory_order_relaxed);
     auto submitted_slice_count = submitted_.load(std::memory_order_relaxed);
 
@@ -962,8 +1100,11 @@ void FlagcxWorkerPool::performPostSend(int tid) {
         break;
       }
 
-      if (chosen == nullptr)
+      if (chosen == nullptr) {
+        if (profileEnabled_)
+          profileQpFull_.fetch_add(1, std::memory_order_relaxed);
         break; // all of this worker's QPs for the engine are full; retry later
+      }
 
       volatile int *depthPtr = &chosen->wrDepth;
       __sync_fetch_and_add(depthPtr, (int)take);
@@ -973,9 +1114,42 @@ void FlagcxWorkerPool::performPostSend(int tid) {
         sl->qpDepth = depthPtr;
       }
 
+      if (profileEnabled_) {
+        const uint64_t postNs = nowNs();
+        uint64_t latencyNs = 0;
+        uint64_t maxLatencyNs = 0;
+        for (size_t k = 0; k < take; k++) {
+          FlagcxSlice *sl = pending.slices[i + k];
+          const uint64_t value = postNs >= sl->profileEnqueueNs
+                                     ? postNs - sl->profileEnqueueNs
+                                     : 0;
+          latencyNs += value;
+          maxLatencyNs = std::max(maxLatencyNs, value);
+        }
+        profilePostCalls_.fetch_add(1, std::memory_order_relaxed);
+        profilePostWqes_.fetch_add(take, std::memory_order_relaxed);
+        profileQueueLatencyNs_.fetch_add(latencyNs, std::memory_order_relaxed);
+        profileQueueLatencySamples_.fetch_add(take, std::memory_order_relaxed);
+        updateMax(profileMaxQueueLatencyNs_, maxLatencyNs);
+      }
+
       int failedCount = 0;
       flagcxResult_t rc = flagcxP2pSliceBatch(
           sc, chosen->qp, (int)take, pending.slices.data() + i, &failedCount);
+
+      if (profileEnabled_) {
+        uint64_t signaled = 0;
+        uint64_t maxGroup = 0;
+        for (size_t k = 0; k < take; k++) {
+          FlagcxSlice *sl = pending.slices[i + k];
+          if (sl->completionMarker == sl) {
+            signaled++;
+            maxGroup = std::max<uint64_t>(maxGroup, sl->completionGroupSize);
+          }
+        }
+        profileSignaledWqes_.fetch_add(signaled, std::memory_order_relaxed);
+        updateMax(profileMaxGroupSize_, maxGroup);
+      }
 
       if (rc != flagcxSuccess && failedCount > 0)
         processed_.fetch_add(failedCount, std::memory_order_release);
@@ -991,11 +1165,20 @@ void FlagcxWorkerPool::performPollCq() {
   if (shared_cq_ == nullptr)
     return;
 
+  if (profileEnabled_)
+    profilePollAttempts_.fetch_add(1, std::memory_order_relaxed);
+
   // Preserve CQ processing order so a task cannot release grouped slices
   // while another worker is still handling an earlier CQE for that group.
   std::unique_lock<std::mutex> cqLock(cq_poll_mu_, std::try_to_lock);
-  if (!cqLock.owns_lock())
+  if (!cqLock.owns_lock()) {
+    if (profileEnabled_)
+      profilePollLockMisses_.fetch_add(1, std::memory_order_relaxed);
     return;
+  }
+
+  if (profileEnabled_)
+    profilePollCalls_.fetch_add(1, std::memory_order_relaxed);
 
   constexpr int kMaxPollBatch = 256;
   struct ibv_wc wcs[kMaxPollBatch];
@@ -1005,8 +1188,16 @@ void FlagcxWorkerPool::performPollCq() {
     WARN("NET/IB_P2P : ibv_poll_cq failed on shared CQ %p", shared_cq_);
     return;
   }
-  if (n == 0)
+  if (n == 0) {
+    if (profileEnabled_)
+      profileEmptyPolls_.fetch_add(1, std::memory_order_relaxed);
     return;
+  }
+
+  if (profileEnabled_)
+    profileCqes_.fetch_add(n, std::memory_order_relaxed);
+  if (profileEnabled_ && n == batch)
+    profileFullPolls_.fetch_add(1, std::memory_order_relaxed);
 
   uint64_t sliceProgressed = 0;
   std::unordered_map<volatile int *, int> qpDepthSet;
@@ -1015,6 +1206,9 @@ void FlagcxWorkerPool::performPollCq() {
     if (raw == 0 || (raw & 1ull) == 0)
       continue;
 
+    if (profileEnabled_)
+      profileSliceCqes_.fetch_add(1, std::memory_order_relaxed);
+
     FlagcxSlice *slice =
         reinterpret_cast<FlagcxSlice *>(raw & ~(uintptr_t)1ull);
     FlagcxSlice *marker =
@@ -1022,6 +1216,8 @@ void FlagcxWorkerPool::performPollCq() {
     const bool cqeFailed = wcs[i].status != IBV_WC_SUCCESS;
 
     if (cqeFailed) {
+      if (profileEnabled_)
+        profileErrorCqes_.fetch_add(1, std::memory_order_relaxed);
       WARN("NET/IB_P2P : pool poll error status %d for slice %p", wcs[i].status,
            slice);
       marker->completionGroupFailed.store(true, std::memory_order_release);
@@ -1051,12 +1247,15 @@ void FlagcxWorkerPool::performPollCq() {
       FlagcxSlice *next = member->completionNext;
       volatile int *depth = member->qpDepth;
       const bool isMarker = member == marker;
+      const uint32_t length = member->length;
       const bool completed =
           groupFailed ? member->markFailed() : member->markSuccess();
       if (completed) {
         if (depth != NULL)
           qpDepthSet[depth]++;
         sliceProgressed++;
+        if (profileEnabled_ && !groupFailed)
+          profileCompletedBytes_.fetch_add(length, std::memory_order_relaxed);
       }
       if (isMarker)
         break;
