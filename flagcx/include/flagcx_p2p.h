@@ -605,6 +605,7 @@ struct FlagcxP2pGlobalConfig {
 
   /* Misc */
   bool enableDestDeviceAffinity = false; /* FLAGCX_P2P_DEST_DEV_AFFINITY */
+  bool enableDedicatedCqPoller = false;  /* FLAGCX_P2P_DEDICATED_CQ_POLLER */
   bool enableProfile = false;            /* FLAGCX_P2P_PROFILE           */
   uint64_t profileIntervalMs = 1000;     /* FLAGCX_P2P_PROFILE_INTERVAL_MS */
 };

@@ -73,6 +73,7 @@ FLAGCX_PARAM(P2pIbTc, "P2P_IB_TC", -1);
 FLAGCX_PARAM(P2pRetryCnt, "P2P_RETRY_CNT", 7);
 FLAGCX_PARAM(P2pNotifMaxPeers, "P2P_NOTIF_MAX_PEERS", 64);
 FLAGCX_PARAM(P2pDestDevAffinity, "P2P_DEST_DEV_AFFINITY", 0);
+FLAGCX_PARAM(P2pDedicatedCqPoller, "P2P_DEDICATED_CQ_POLLER", 0);
 FLAGCX_PARAM(P2pProfile, "P2P_PROFILE", 0);
 FLAGCX_PARAM(P2pProfileIntervalMs, "P2P_PROFILE_INTERVAL_MS", 1000);
 
@@ -137,6 +138,7 @@ void loadGlobalConfig(FlagcxP2pGlobalConfig &c) {
   c.notifMaxPeers = clampParam<int>(flagcxParamP2pNotifMaxPeers(), 1, 1024, 64,
                                     "P2P_NOTIF_MAX_PEERS");
   c.enableDestDeviceAffinity = (flagcxParamP2pDestDevAffinity() != 0);
+  c.enableDedicatedCqPoller = (flagcxParamP2pDedicatedCqPoller() != 0);
   c.enableProfile = (flagcxParamP2pProfile() != 0);
   c.profileIntervalMs =
       clampParam<uint64_t>(flagcxParamP2pProfileIntervalMs(), 100, 60000, 1000,
@@ -172,8 +174,10 @@ void dumpGlobalConfigImpl(const FlagcxP2pGlobalConfig &c) {
        (unsigned)c.ibPort, c.gidIndex, c.mtuLength, c.ibTrafficClass,
        c.retryCnt, c.maxSge, c.maxInline);
   INFO(FLAGCX_INIT,
-       "notifMaxPeers=%d destDevAffinity=%d profile=%d profileIntervalMs=%llu",
-       c.notifMaxPeers, (int)c.enableDestDeviceAffinity, (int)c.enableProfile,
+       "notifMaxPeers=%d destDevAffinity=%d dedicatedCqPoller=%d profile=%d "
+       "profileIntervalMs=%llu",
+       c.notifMaxPeers, (int)c.enableDestDeviceAffinity,
+       (int)c.enableDedicatedCqPoller, (int)c.enableProfile,
        (unsigned long long)c.profileIntervalMs);
 }
 
@@ -550,8 +554,9 @@ public:
 
 private:
   void transferWorkerLoop(int tid);
-  void performPostSend(int tid);
-  void performPollCq();
+  bool performPostSend(int tid);
+  bool performPollCq();
+  void cqPollWorkerLoop();
   void notifWorkerLoop();
   void maybeLogProfile(uint64_t now);
 
@@ -579,6 +584,7 @@ private:
   size_t maxWrPerPost_;
   size_t batchPollSize_;
   int maxWrDepth_ = 0;
+  bool dedicatedCqPollerEnabled_ = false;
   bool profileEnabled_ = false;
   uint64_t profileIntervalNs_ = 0;
   uint64_t profileLastLogNs_ = 0;
@@ -599,6 +605,8 @@ private:
 
   std::atomic<uint64_t> submitted_{0};
   std::atomic<uint64_t> processed_{0};
+  std::atomic<uint64_t> queued_{0};
+  std::atomic<uint64_t> postedOutstanding_{0};
   std::atomic<int> suspended_flag_{0};
 
   std::atomic<uint64_t> profileSubmitCalls_{0};
@@ -622,6 +630,10 @@ private:
   std::atomic<uint64_t> profileQueueLatencySamples_{0};
   std::atomic<uint64_t> profileMaxQueueLatencyNs_{0};
   std::atomic<uint64_t> profileCompletedBytes_{0};
+  std::atomic<uint64_t> profileCqThreadWakeups_{0};
+  std::atomic<uint64_t> profileCqIdleWaits_{0};
+  std::atomic<uint64_t> profileCqBackoffWaits_{0};
+  std::atomic<uint64_t> profileCqBackoffNs_{0};
 
   std::mutex cq_poll_mu_;
   std::condition_variable cv_;
@@ -629,6 +641,7 @@ private:
 
   std::atomic<bool> running_{true};
   std::vector<std::thread> transferThreads_;
+  std::thread cqPollThread_;
 
   FlagcxP2pEngine *engine_ = nullptr;
   std::thread notifThread_;
@@ -675,6 +688,7 @@ FlagcxWorkerPool::FlagcxWorkerPool(int ibDevN, struct ibv_context *ctx)
   numShards_ = C.shardCount;
   maxWrPerPost_ = C.maxWrPerPost;
   batchPollSize_ = C.batchPollSize;
+  dedicatedCqPollerEnabled_ = C.enableDedicatedCqPoller;
   profileEnabled_ = C.enableProfile;
   profileIntervalNs_ = C.profileIntervalMs * 1000ull * 1000ull;
   profileLastLogNs_ = nowNs();
@@ -710,6 +724,12 @@ FlagcxWorkerPool::FlagcxWorkerPool(int ibDevN, struct ibv_context *ctx)
 
   hasCpuAffinity_ = flagcxP2pGetNicCpuset(ctx, &cpuAffinity_);
 
+  if (dedicatedCqPollerEnabled_) {
+    cqPollThread_ = std::thread([this] { this->cqPollWorkerLoop(); });
+    INFO(FLAGCX_INIT, "NET/IB_P2P : pool[%d] dedicated CQ poller spawned",
+         ibDevN_);
+  }
+
   transferThreads_.reserve(numWorkers_);
   for (int t = 0; t < numWorkers_; t++) {
     transferThreads_.emplace_back([this, t] { this->transferWorkerLoop(t); });
@@ -723,6 +743,8 @@ FlagcxWorkerPool::~FlagcxWorkerPool() {
     if (t.joinable())
       t.join();
   }
+  if (cqPollThread_.joinable())
+    cqPollThread_.join();
   // notifThread_ is joined explicitly via stopNotif() in EngineDestroy;
   // by the time ~pool runs at process exit it should already be joined.
   if (notifThread_.joinable()) {
@@ -888,6 +910,11 @@ flagcxResult_t FlagcxWorkerPool::submitPostSend(void *sendComm,
                                          std::memory_order_relaxed);
   }
 
+  // Publish accounting before making shard entries visible. A worker already
+  // processing another submission can discover these entries immediately.
+  submitted_.fetch_add(count, std::memory_order_release);
+  queued_.fetch_add(count, std::memory_order_release);
+
   const int fanout = std::min(numShards_, count);
   int shard = 0;
   if (fanout != numShards_) {
@@ -908,9 +935,8 @@ flagcxResult_t FlagcxWorkerPool::submitPostSend(void *sendComm,
     if (++shard == numShards_)
       shard = 0;
   }
-  submitted_.fetch_add(count, std::memory_order_release);
-
-  if (suspended_flag_.load(std::memory_order_acquire) > 0) {
+  if (dedicatedCqPollerEnabled_ ||
+      suspended_flag_.load(std::memory_order_acquire) > 0) {
     std::lock_guard<std::mutex> lk(cv_mu_);
     cv_.notify_all();
   }
@@ -948,6 +974,10 @@ void FlagcxWorkerPool::maybeLogProfile(uint64_t now) {
   const uint64_t queueLatencySamples = take(profileQueueLatencySamples_);
   const uint64_t maxQueueLatencyNs = take(profileMaxQueueLatencyNs_);
   const uint64_t completedBytes = take(profileCompletedBytes_);
+  const uint64_t cqThreadWakeups = take(profileCqThreadWakeups_);
+  const uint64_t cqIdleWaits = take(profileCqIdleWaits_);
+  const uint64_t cqBackoffWaits = take(profileCqBackoffWaits_);
+  const uint64_t cqBackoffNs = take(profileCqBackoffNs_);
 
   if (submitCalls == 0 && postCalls == 0 && cqes == 0)
     return;
@@ -974,7 +1004,9 @@ void FlagcxWorkerPool::maybeLogProfile(uint64_t now) {
       "poll_calls=%llu poll_lock_misses=%llu empty_polls=%llu "
       "full_polls=%llu qp_full=%llu backpressure_yields=%llu "
       "queue_us_avg=%.2f queue_us_max=%.2f completed_bytes=%llu "
-      "goodput_gbps=%.3f outstanding=%llu\n",
+      "goodput_gbps=%.3f outstanding=%llu queued=%llu posted=%llu "
+      "cq_thread_wakeups=%llu cq_idle_waits=%llu cq_backoff_waits=%llu "
+      "cq_backoff_us=%.2f\n",
       ibDevN_, (double)elapsedNs / 1000000.0, (unsigned long long)submitCalls,
       (unsigned long long)submitWqes, (unsigned long long)submitBytes,
       (unsigned long long)postCalls, (unsigned long long)postWqes, averagePost,
@@ -986,19 +1018,44 @@ void FlagcxWorkerPool::maybeLogProfile(uint64_t now) {
       (unsigned long long)fullPolls, (unsigned long long)qpFull,
       (unsigned long long)backpressureYields, averageQueueUs,
       (double)maxQueueLatencyNs / 1000.0, (unsigned long long)completedBytes,
-      goodputGbps, (unsigned long long)outstanding);
+      goodputGbps, (unsigned long long)outstanding,
+      (unsigned long long)queued_.load(std::memory_order_relaxed),
+      (unsigned long long)postedOutstanding_.load(std::memory_order_relaxed),
+      (unsigned long long)cqThreadWakeups, (unsigned long long)cqIdleWaits,
+      (unsigned long long)cqBackoffWaits, (double)cqBackoffNs / 1000.0);
   fflush(stdout);
 }
 
 void FlagcxWorkerPool::transferWorkerLoop(int tid) {
   pinToNicCpus("transferWorker", tid);
   const static uint64_t kWaitPeriodInNano = 100ull * 1000 * 1000; // 100ms
+  const static auto kPostRetryDelay = std::chrono::microseconds(10);
   uint64_t last_wait_ts = nowNs();
   uint32_t profileTicks = 0;
 
   while (running_.load(std::memory_order_relaxed)) {
-    if (profileEnabled_ && tid == 0 && (++profileTicks & 0xFFFu) == 0)
+    if (profileEnabled_ && !dedicatedCqPollerEnabled_ && tid == 0 &&
+        (++profileTicks & 0xFFFu) == 0)
       maybeLogProfile(nowNs());
+
+    if (dedicatedCqPollerEnabled_) {
+      if (queued_.load(std::memory_order_acquire) == 0) {
+        std::unique_lock<std::mutex> lock(cv_mu_);
+        suspended_flag_.fetch_add(1, std::memory_order_relaxed);
+        cv_.wait(lock, [this] {
+          return !running_.load(std::memory_order_acquire) ||
+                 queued_.load(std::memory_order_acquire) > 0;
+        });
+        suspended_flag_.fetch_sub(1, std::memory_order_relaxed);
+        continue;
+      }
+
+      if (!performPostSend(tid)) {
+        std::unique_lock<std::mutex> lock(cv_mu_);
+        cv_.wait_for(lock, kPostRetryDelay);
+      }
+      continue;
+    }
 
     auto processed_slice_count = processed_.load(std::memory_order_relaxed);
     auto submitted_slice_count = submitted_.load(std::memory_order_relaxed);
@@ -1023,9 +1080,57 @@ void FlagcxWorkerPool::transferWorkerLoop(int tid) {
   }
 }
 
-void FlagcxWorkerPool::performPostSend(int tid) {
+void FlagcxWorkerPool::cqPollWorkerLoop() {
+  pinToNicCpus("cqPollWorker", 0);
+  constexpr uint32_t kBusyEmptyPolls = 64;
+  const static auto kEmptyPollBackoff = std::chrono::microseconds(10);
+  uint32_t consecutiveEmptyPolls = 0;
+  uint32_t profileTicks = 0;
+
+  while (running_.load(std::memory_order_acquire)) {
+    if (profileEnabled_ && (++profileTicks & 0xFFFu) == 0)
+      maybeLogProfile(nowNs());
+    if (postedOutstanding_.load(std::memory_order_acquire) == 0) {
+      if (profileEnabled_)
+        profileCqIdleWaits_.fetch_add(1, std::memory_order_relaxed);
+      std::unique_lock<std::mutex> lock(cv_mu_);
+      cv_.wait(lock, [this] {
+        return !running_.load(std::memory_order_acquire) ||
+               postedOutstanding_.load(std::memory_order_acquire) > 0;
+      });
+      if (!running_.load(std::memory_order_acquire))
+        break;
+      if (profileEnabled_)
+        profileCqThreadWakeups_.fetch_add(1, std::memory_order_relaxed);
+      consecutiveEmptyPolls = 0;
+    }
+
+    if (performPollCq()) {
+      consecutiveEmptyPolls = 0;
+      continue;
+    }
+
+    if (++consecutiveEmptyPolls >= kBusyEmptyPolls) {
+      const uint64_t waitStartNs = profileEnabled_ ? nowNs() : 0;
+      std::unique_lock<std::mutex> lock(cv_mu_);
+      cv_.wait_for(lock, kEmptyPollBackoff, [this] {
+        return !running_.load(std::memory_order_acquire);
+      });
+      if (profileEnabled_) {
+        profileCqBackoffWaits_.fetch_add(1, std::memory_order_relaxed);
+        profileCqBackoffNs_.fetch_add(nowNs() - waitStartNs,
+                                      std::memory_order_relaxed);
+      }
+      consecutiveEmptyPolls = 0;
+    }
+  }
+}
+
+bool FlagcxWorkerPool::performPostSend(int tid) {
   if (numWorkers_ <= 0)
-    return;
+    return false;
+
+  bool madeProgress = false;
 
   auto &local = collective_slice_queue_[tid];
   for (int s = tid; s < numShards_; s += numWorkers_) {
@@ -1072,7 +1177,9 @@ void FlagcxWorkerPool::performPostSend(int tid) {
            ibDevN_, tid, sc, pending.size());
       for (size_t idx = pending.head; idx < pending.slices.size(); idx++)
         pending.slices[idx]->markFailed();
+      queued_.fetch_sub(pending.size(), std::memory_order_release);
       processed_.fetch_add(pending.size(), std::memory_order_release);
+      madeProgress = true;
       pending.clear();
       continue;
     }
@@ -1134,8 +1241,18 @@ void FlagcxWorkerPool::performPostSend(int tid) {
       }
 
       int failedCount = 0;
+      postedOutstanding_.fetch_add(take, std::memory_order_release);
       flagcxResult_t rc = flagcxP2pSliceBatch(
           sc, chosen->qp, (int)take, pending.slices.data() + i, &failedCount);
+
+      const size_t failed =
+          std::min<size_t>(take, failedCount > 0 ? (size_t)failedCount : 0);
+      if (failed > 0)
+        postedOutstanding_.fetch_sub(failed, std::memory_order_release);
+      queued_.fetch_sub(take, std::memory_order_release);
+      madeProgress = true;
+      if (dedicatedCqPollerEnabled_ && take > failed)
+        cv_.notify_all();
 
       if (profileEnabled_) {
         uint64_t signaled = 0;
@@ -1151,19 +1268,20 @@ void FlagcxWorkerPool::performPostSend(int tid) {
         updateMax(profileMaxGroupSize_, maxGroup);
       }
 
-      if (rc != flagcxSuccess && failedCount > 0)
-        processed_.fetch_add(failedCount, std::memory_order_release);
+      if (rc != flagcxSuccess && failed > 0)
+        processed_.fetch_add(failed, std::memory_order_release);
       i += take;
     }
     pending.head = i;
     if (pending.empty())
       pending.clear();
   }
+  return madeProgress;
 }
 
-void FlagcxWorkerPool::performPollCq() {
+bool FlagcxWorkerPool::performPollCq() {
   if (shared_cq_ == nullptr)
-    return;
+    return false;
 
   if (profileEnabled_)
     profilePollAttempts_.fetch_add(1, std::memory_order_relaxed);
@@ -1174,7 +1292,7 @@ void FlagcxWorkerPool::performPollCq() {
   if (!cqLock.owns_lock()) {
     if (profileEnabled_)
       profilePollLockMisses_.fetch_add(1, std::memory_order_relaxed);
-    return;
+    return false;
   }
 
   if (profileEnabled_)
@@ -1186,12 +1304,12 @@ void FlagcxWorkerPool::performPollCq() {
   int n = 0;
   if (flagcxWrapIbvPollCq(shared_cq_, batch, wcs, &n) != flagcxSuccess) {
     WARN("NET/IB_P2P : ibv_poll_cq failed on shared CQ %p", shared_cq_);
-    return;
+    return false;
   }
   if (n == 0) {
     if (profileEnabled_)
       profileEmptyPolls_.fetch_add(1, std::memory_order_relaxed);
-    return;
+    return false;
   }
 
   if (profileEnabled_)
@@ -1264,8 +1382,13 @@ void FlagcxWorkerPool::performPollCq() {
   }
   for (auto &entry : qpDepthSet)
     __sync_fetch_and_sub(entry.first, entry.second);
-  if (sliceProgressed > 0)
+  if (sliceProgressed > 0) {
+    postedOutstanding_.fetch_sub(sliceProgressed, std::memory_order_release);
     processed_.fetch_add(sliceProgressed, std::memory_order_release);
+    if (dedicatedCqPollerEnabled_)
+      cv_.notify_all();
+  }
+  return true;
 }
 
 // ---- Per-ibDev singleton plumbing -----------------------------------
